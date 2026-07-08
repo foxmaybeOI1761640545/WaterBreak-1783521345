@@ -1,0 +1,27 @@
+{
+  "name": "random-water-reminder",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "sync:android": "npm run build && npx cap sync android",
+    "android:debug": "cd android && gradle assembleDebug",
+    "android:release": "cd android && gradle assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.7",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.7",
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.7",
+    "@vitejs/plugin-vue": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vue-tsc": "latest"
+  }
+}

@@ -1,0 +1,26 @@
+package com.randomwaterreminder.app
+
+data class ReminderConfig(
+    val enabled: Boolean = false,
+    val startHour: Int = 8,
+    val startMinute: Int = 0,
+    val endHour: Int = 22,
+    val endMinute: Int = 0,
+    val minIntervalMinutes: Int = 60,
+    val maxIntervalMinutes: Int = 120,
+    val nextReminderTime: Long = 0L,
+    val waterNotificationTitle: String = "该喝水啦",
+    val waterNotificationText: String = "起来喝一杯水，休息一下眼睛。",
+    val waterSoundMode: String = "default",
+    val waterCustomSoundUri: String = "",
+    val waterCustomSoundName: String = "",
+    val waterVolumePercent: Int = 100,
+    val screenLimitEnabled: Boolean = false,
+    val screenOnLimitMinutes: Int = 0,
+    val requiredScreenOffMinutes: Int = 5,
+    val cancelBeforeLockCount: Int = 3,
+    val screenSoundMode: String = "default",
+    val screenCustomSoundUri: String = "",
+    val screenCustomSoundName: String = "",
+    val screenVolumePercent: Int = 100,
+)
