@@ -83,8 +83,10 @@ object NotificationHelper {
             return AlertResult(posted = false, reason = "通知渠道已关闭", channelImportance = importance)
         }
 
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val requestFullScreen = !powerManager.isInteractive && canUseFullScreenIntent(context)
+        val requestFullScreen = runCatching {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.isInteractive.not() && canUseFullScreenIntent(context)
+        }.getOrDefault(false)
         val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen, sessionId)
         return runCatching {
             NotificationManagerCompat.from(context).notify(notificationId(type), notification)
@@ -158,7 +160,7 @@ object NotificationHelper {
     }
 
     fun cancelAlert(context: Context, type: ReminderType) {
-        NotificationManagerCompat.from(context).cancel(notificationId(type))
+        runCatching { NotificationManagerCompat.from(context).cancel(notificationId(type)) }
     }
 
     fun cancelScreenAlert(context: Context) {
@@ -166,31 +168,29 @@ object NotificationHelper {
     }
 
     fun cancelVibration(context: Context) {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            context.getSystemService(VibratorManager::class.java).defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
-        vibrator.cancel()
+        runCatching { vibrator(context)?.cancel() }
     }
 
-    fun vibrateAlert(context: Context): Boolean {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            context.getSystemService(VibratorManager::class.java).defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
-        if (!vibrator.hasVibrator()) return false
+    fun vibrateAlert(context: Context): Boolean = runCatching {
+        val vibrator = vibrator(context) ?: return@runCatching false
+        if (!vibrator.hasVibrator()) return@runCatching false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator.vibrate(VibrationEffect.createWaveform(VIBRATION_PATTERN, -1))
         } else {
             @Suppress("DEPRECATION")
             vibrator.vibrate(VIBRATION_PATTERN, -1)
         }
-        return true
-    }
+        true
+    }.getOrDefault(false)
+
+    private fun vibrator(context: Context): Vibrator? = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+    }.getOrNull()
 
     private fun ensureAlertChannel(context: Context, type: ReminderType, config: ReminderConfig) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

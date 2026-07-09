@@ -1,7 +1,9 @@
 package com.randomwaterreminder.app
 
 import android.Manifest
+import android.app.admin.DevicePolicyManager
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -205,6 +207,11 @@ class WaterReminderPlugin : Plugin() {
         call.resolve(ScreenStateTracker.status(context))
     }
 
+    @PluginMethod
+    fun getScreenDashboardState(call: PluginCall) {
+        call.resolve(ScreenStateTracker.dashboardStatus(context))
+    }
+
 
     @PluginMethod
     fun openExactAlarmSettings(call: PluginCall) {
@@ -264,8 +271,12 @@ class WaterReminderPlugin : Plugin() {
 
     @PluginMethod
     fun openDeviceAdminSettings(call: PluginCall) {
+        val addAdmin = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(context, ReminderDeviceAdminReceiver::class.java))
+            putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于连续取消屏幕提醒后执行系统锁屏。")
+        }
         val fallback = Intent(Settings.ACTION_SECURITY_SETTINGS)
-        openSettingsIntent(call, ReminderLockHelper.deviceAdminIntent(context), "device_admin", fallback = fallback, fallbackTarget = "device_security")
+        openSettingsIntent(call, addAdmin, "device_admin", fallback = fallback, fallbackTarget = "device_security")
     }
 
     @PluginMethod
@@ -309,36 +320,27 @@ class WaterReminderPlugin : Plugin() {
         fallback: Intent? = null,
         fallbackTarget: String = "app_details",
     ) {
+        val primary = intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val packageManager = context.packageManager
-        val candidates = listOf(
-            intent.copyForSettingsLaunch() to (target to false),
-            fallback?.copyForSettingsLaunch() to (fallbackTarget to true),
-        )
-        val selected = candidates.firstOrNull { (candidate, _) ->
-            candidate != null && runCatching { candidate.resolveActivity(packageManager) != null }.getOrDefault(false)
+        val primaryResolved = primary.resolveActivity(packageManager) != null
+        val finalIntent: Intent
+        val finalTarget: String
+        val usedFallback: Boolean
+        when {
+            primaryResolved -> { finalIntent = primary; finalTarget = target; usedFallback = false }
+            fallback != null && fallback.resolveActivity(packageManager) != null -> { finalIntent = fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); finalTarget = fallbackTarget; usedFallback = true }
+            else -> {
+                call.resolve(settingsResult(false, target, reason = "系统没有可打开的设置页面，请手动进入系统设置"))
+                return
+            }
         }
-        if (selected?.first == null) {
-            call.resolve(settingsResult(false, target, reason = "系统没有可打开的设置页面，请手动进入系统设置"))
-            return
-        }
-        val finalIntent = selected.first!!
-        val finalTarget = selected.second.first
-        val usedFallback = selected.second.second
-        val starter = activity ?: context
-        runCatching { starter.startActivity(finalIntent) }
+        runCatching { (activity ?: context).startActivity(finalIntent) }
             .onSuccess { call.resolve(settingsResult(true, finalTarget, usedFallback)) }
             .onFailure { error ->
-                val reason = when (error) {
-                    is ActivityNotFoundException -> "系统没有可打开的设置页面"
-                    is SecurityException -> "系统拒绝打开该设置页面，请手动进入系统设置"
-                    is IllegalArgumentException -> "设置页面参数无效，请手动进入系统设置"
-                    else -> error.message ?: "无法打开系统设置"
-                }
-                call.resolve(settingsResult(false, finalTarget, usedFallback, reason))
+                if (error is ActivityNotFoundException) call.resolve(settingsResult(false, finalTarget, usedFallback, "系统没有可打开的设置页面"))
+                else call.resolve(settingsResult(false, finalTarget, usedFallback, error.message ?: "无法打开系统设置"))
             }
     }
-
-    private fun Intent.copyForSettingsLaunch(): Intent = Intent(this).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
 
     private fun settingsResult(opened: Boolean, target: String, fallback: Boolean = false, reason: String? = null): JSObject = JSObject().apply {
         put("opened", opened)
@@ -347,9 +349,7 @@ class WaterReminderPlugin : Plugin() {
         if (!reason.isNullOrBlank()) put("reason", reason)
     }
 
-    private fun appDetailsIntent(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-        data = runCatching { Uri.parse("package:${context.packageName}") }.getOrNull()
-    }
+    private fun appDetailsIntent(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") }
     private fun isXiaomiLikeDevice(): Boolean = listOf(Build.MANUFACTURER, Build.BRAND).any { it.contains("xiaomi", ignoreCase = true) || it.contains("redmi", ignoreCase = true) || it.contains("poco", ignoreCase = true) }
 
     @PluginMethod
@@ -445,6 +445,9 @@ class WaterReminderPlugin : Plugin() {
             put("screenCycleLimit", cycle.limit)
             put("screenCycleActiveSessionId", cycle.activeSessionId)
             put("screenCycleSessionStartedAt", cycle.sessionStartedAt)
+            put("screenCycleId", cycle.cycleId)
+            put("screenCycleStartedAt", cycle.cycleStartedAt)
+            put("screenCycleUpdatedAt", cycle.cycleUpdatedAt)
             put("screenSoundMode", screenSoundMode)
             put("screenCustomSoundUri", screenCustomSoundUri)
             put("screenCustomSoundName", screenCustomSoundName)

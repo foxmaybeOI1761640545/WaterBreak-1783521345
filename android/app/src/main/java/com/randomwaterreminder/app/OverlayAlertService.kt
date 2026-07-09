@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.ResultReceiver
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
@@ -18,6 +19,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
 
 class OverlayAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -30,9 +32,11 @@ class OverlayAlertService : Service() {
     private var sessionId = ""
 
     private val autoDismiss = Runnable {
-        if (currentType == ReminderType.SCREEN_LIMIT) AlertCoordinator.dismissScreenAlert(this, sessionId) else AlertCoordinator.dismissAlert(this, currentType)
-        removeOverlay()
-        stopSelfSafely()
+        if (currentType == ReminderType.SCREEN_LIMIT) {
+            AlertCoordinator.dismissScreenAlert(this, sessionId)
+        } else {
+            AlertCoordinator.dismissAlert(this, currentType)
+        }
     }
 
     override fun onCreate() {
@@ -41,46 +45,49 @@ class OverlayAlertService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_DISMISS) {
-            val requestedType = ReminderType.from(intent.getStringExtra(EXTRA_TYPE))
-            val requestedSession = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
-            if (requestedType == currentType && (requestedSession.isBlank() || requestedSession == sessionId)) {
-                removeOverlay()
-                stopSelfSafely()
-            }
+        if (intent == null) {
+            stopSelfSafely()
             return START_NOT_STICKY
         }
 
-        currentType = ReminderType.from(intent?.getStringExtra(EXTRA_TYPE))
+        currentType = ReminderType.from(intent.getStringExtra(EXTRA_TYPE))
         currentReceiver = getResultReceiver(intent)
-        isTest = intent?.getBooleanExtra(EXTRA_IS_TEST, false) ?: false
-        sessionId = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+        isTest = intent.getBooleanExtra(EXTRA_IS_TEST, false)
+        sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
         resultReported = false
-        val title = intent?.getStringExtra(EXTRA_TITLE)
+        val title = intent.getStringExtra(EXTRA_TITLE)
             ?: if (currentType == ReminderType.WATER) "该喝水啦" else "亮屏时间过长"
-        val text = intent?.getStringExtra(EXTRA_TEXT) ?: "请查看提醒。"
+        val text = intent.getStringExtra(EXTRA_TEXT) ?: "请查看提醒。"
         val config = ReminderPreferences.read(this)
 
-        startForeground(
-            NotificationHelper.OVERLAY_RUNTIME_NOTIFICATION_ID,
-            NotificationHelper.buildOverlayRuntimeNotification(this, currentType, title),
-        )
+        val foregroundStarted = runCatching {
+            startForeground(
+                NotificationHelper.OVERLAY_RUNTIME_NOTIFICATION_ID,
+                NotificationHelper.buildOverlayRuntimeNotification(this, currentType, title),
+            )
+            true
+        }.onFailure { Log.e(TAG, "startForeground failed type=${currentType.value} session=$sessionId", it) }
+            .getOrDefault(false)
+        if (!foregroundStarted) {
+            fallbackToNotification(title, text, config, "前台悬浮服务启动失败")
+            return START_NOT_STICKY
+        }
+
+        if (consumePendingDismissal(currentType, sessionId)) {
+            stopSelfSafely()
+            return START_NOT_STICKY
+        }
 
         if (!Settings.canDrawOverlays(this)) {
             fallbackToNotification(title, text, config, "悬浮窗权限不可用")
             return START_NOT_STICKY
         }
 
-        val shown = showOverlay(currentType, title, text)
-        if (!shown) {
+        if (!showOverlay(currentType, title, text)) {
             fallbackToNotification(title, text, config, "创建悬浮窗失败")
             return START_NOT_STICKY
         }
 
-        // Keep the short-lived service in the foreground while the overlay is visible.
-        // Removing foreground state immediately makes Android free to stop a background
-        // service before the user can interact with the window. The runtime notification
-        // is removed together with the overlay in stopSelfSafely().
         report(AlertResult(overlayShown = true, reason = "已显示悬浮窗"))
         handler.removeCallbacks(autoDismiss)
         handler.postDelayed(autoDismiss, AUTO_DISMISS_MILLIS)
@@ -89,7 +96,7 @@ class OverlayAlertService : Service() {
 
     private fun showOverlay(type: ReminderType, title: String, text: String): Boolean {
         removeOverlay()
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = runCatching { getSystemService(Context.WINDOW_SERVICE) as WindowManager }.getOrNull() ?: return false
         val density = resources.displayMetrics.density
         fun dp(value: Int): Int = (value * density).toInt()
 
@@ -117,19 +124,16 @@ class OverlayAlertService : Service() {
             if (type == ReminderType.WATER) {
                 addView(Button(context).apply {
                     this.text = "知道了"
-                    setOnClickListener {
-                        removeOverlay()
-                        stopSelfSafely()
-                    }
+                    setOnClickListener { AlertCoordinator.dismissAlert(this@OverlayAlertService, ReminderType.WATER) }
                 })
             } else {
                 addView(Button(context).apply {
                     this.text = "熄屏"
-                    setOnClickListener { lockFromOverlay(title, text) }
+                    setOnClickListener { lockFromOverlay() }
                 })
                 addView(Button(context).apply {
                     this.text = "取消"
-                    setOnClickListener { cancelScreenAlert(title, text) }
+                    setOnClickListener { cancelScreenAlert() }
                 })
             }
         }
@@ -137,9 +141,7 @@ class OverlayAlertService : Service() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
@@ -156,45 +158,48 @@ class OverlayAlertService : Service() {
         return runCatching {
             windowManager?.addView(root, params)
             true
-        }.getOrElse {
-            overlayView = null
-            false
-        }
+        }.onFailure { Log.e(TAG, "add overlay failed type=${type.value} session=$sessionId", it) }
+            .getOrElse {
+                overlayView = null
+                false
+            }
     }
 
-    private fun lockFromOverlay(title: String, text: String) {
-        if (ReminderLockHelper.lockNow(this)) {
-            removeOverlay()
-            stopSelfSafely()
+    private fun lockFromOverlay() {
+        val result = ReminderLockHelper.tryLockNow(this, force = true)
+        when {
+            result.succeeded -> Toast.makeText(this, "已执行熄屏。", Toast.LENGTH_SHORT).show()
+            result.needsAdmin -> Toast.makeText(this, "请先在应用的权限配置中开启设备管理器锁屏权限。", Toast.LENGTH_LONG).show()
+            result.error.isNotBlank() -> Toast.makeText(this, result.error, Toast.LENGTH_LONG).show()
+        }
+        AlertCoordinator.dismissScreenAlert(this, sessionId)
+    }
+
+    private fun cancelScreenAlert() {
+        if (isTest) {
+            AlertCoordinator.dismissScreenAlert(this, sessionId)
             return
         }
-        Toast.makeText(this, "请在弹出的页面中授予设备管理权限。", Toast.LENGTH_LONG).show()
-        runCatching { startActivity(ReminderAlertActivity.intent(this, ReminderType.SCREEN_LIMIT, title, text, sessionId = sessionId)) }
-        removeOverlay()
-        stopSelfSafely()
-    }
-
-    private fun cancelScreenAlert(title: String, text: String) {
-        if (isTest) { AlertCoordinator.dismissScreenAlert(this, sessionId); stopSelfSafely(); return }
-        if (ScreenStateTracker.recordScreenAlertCancel(this, sessionId)) {
-            lockFromOverlay(title, text)
-            return
+        val result = ScreenStateTracker.recordScreenAlertCancel(this, sessionId)
+        val message = when {
+            !result.accepted -> "本次提醒已经处理，不会重复计数。"
+            result.needsAdmin -> "已达取消阈值，请在权限配置中开启设备管理器锁屏权限。"
+            result.lockSucceeded -> "已达到取消阈值并执行熄屏。"
+            result.shouldForceLock -> "已达到取消阈值，系统将继续执行熄屏。"
+            else -> "已取消本次提醒，未完成息屏休息前仍会再次提醒。"
         }
-        Toast.makeText(this, "已取消本次提醒，未完成息屏休息前仍会再次提醒。", Toast.LENGTH_SHORT).show()
-        removeOverlay()
-        stopSelfSafely()
-    }
-
-    private fun dismissIfMatches(type: ReminderType, requestedSessionId: String) {
-        if (type == currentType && (requestedSessionId.isBlank() || requestedSessionId == sessionId)) {
-            removeOverlay()
-            stopSelfSafely()
-        }
+        Toast.makeText(this, message, if (result.needsAdmin) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+        AlertCoordinator.dismissScreenAlert(this, sessionId)
     }
 
     private fun fallbackToNotification(title: String, text: String, config: ReminderConfig, cause: String) {
         stopForegroundCompat(removeNotification = true)
-        val notificationResult = NotificationHelper.showReminder(this, currentType, title, text, config)
+        val notificationResult = runCatching {
+            NotificationHelper.showReminder(this, currentType, title, text, config, sessionId)
+        }.getOrElse {
+            Log.e(TAG, "notification fallback failed", it)
+            AlertResult(posted = false, reason = it.message ?: "通知兜底失败")
+        }
         report(
             notificationResult.copy(
                 fallbackUsed = true,
@@ -207,32 +212,41 @@ class OverlayAlertService : Service() {
     private fun report(result: AlertResult) {
         if (resultReported) return
         resultReported = true
-        currentReceiver?.send(android.app.Activity.RESULT_OK, result.toBundle())
+        runCatching { currentReceiver?.send(android.app.Activity.RESULT_OK, result.toBundle()) }
+    }
+
+    private fun dismissMatching(type: ReminderType, requestedSession: String) {
+        if (type != currentType) return
+        if (requestedSession.isNotBlank() && requestedSession != sessionId) return
+        removeOverlay()
+        stopSelfSafely()
     }
 
     private fun removeOverlay() {
         handler.removeCallbacks(autoDismiss)
-        overlayView?.let { view -> runCatching { windowManager?.removeView(view) } }
+        overlayView?.let { view -> runCatching { windowManager?.removeView(view) }.onFailure { Log.w(TAG, "remove overlay failed", it) } }
         overlayView = null
     }
 
     private fun stopForegroundCompat(removeNotification: Boolean) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(if (removeNotification) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(removeNotification)
-        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(if (removeNotification) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(removeNotification)
+            }
+        }.onFailure { Log.w(TAG, "stopForeground failed", it) }
     }
 
     private fun stopSelfSafely() {
         stopForegroundCompat(removeNotification = true)
-        stopSelf()
+        runCatching { stopSelf() }
     }
 
     override fun onDestroy() {
-        if (activeService?.get() === this) activeService = null
         removeOverlay()
+        if (activeService?.get() === this) activeService = null
         super.onDestroy()
     }
 
@@ -249,7 +263,7 @@ class OverlayAlertService : Service() {
     }
 
     companion object {
-        private const val ACTION_DISMISS = "com.randomwaterreminder.DISMISS_OVERLAY"
+        private const val TAG = "OverlayAlertService"
         private const val EXTRA_TYPE = "type"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TEXT = "text"
@@ -257,7 +271,20 @@ class OverlayAlertService : Service() {
         private const val EXTRA_IS_TEST = "isTest"
         private const val EXTRA_SESSION_ID = "sessionId"
         private const val AUTO_DISMISS_MILLIS = 2L * 60L * 1000L
+        private const val PENDING_DISMISS_TTL_MS = 10_000L
+        private val mainHandler = Handler(Looper.getMainLooper())
+        private val pendingDismissals = ConcurrentHashMap<String, Long>()
         @Volatile private var activeService: WeakReference<OverlayAlertService>? = null
+
+        private fun dismissalKey(type: ReminderType, sessionId: String): String = "${type.value}:${sessionId.ifBlank { "*" }}"
+
+        private fun consumePendingDismissal(type: ReminderType, sessionId: String): Boolean {
+            val now = System.currentTimeMillis()
+            pendingDismissals.entries.removeIf { now - it.value > PENDING_DISMISS_TTL_MS }
+            val exact = dismissalKey(type, sessionId)
+            val wildcard = dismissalKey(type, "")
+            return pendingDismissals.remove(exact) != null || pendingDismissals.remove(wildcard) != null
+        }
 
         fun start(
             context: Context,
@@ -279,18 +306,17 @@ class OverlayAlertService : Service() {
             return runCatching {
                 ContextCompat.startForegroundService(context.applicationContext, intent)
                 true
-            }.getOrDefault(false)
+            }.onFailure { Log.e(TAG, "start foreground service failed type=${type.value} session=$sessionId", it) }
+                .getOrDefault(false)
         }
 
         fun dismiss(context: Context, type: ReminderType, sessionId: String = "") {
-            // Never start a foreground service only to dismiss an overlay: on Android O+
-            // that path can crash if startForeground() is not called quickly enough.
-            val service = activeService?.get()
-            if (service != null) {
-                service.handler.post { service.dismissIfMatches(type, sessionId) }
-                return
+            pendingDismissals[dismissalKey(type, sessionId)] = System.currentTimeMillis()
+            val service = activeService?.get() ?: return
+            mainHandler.post {
+                service.dismissMatching(type, sessionId)
+                consumePendingDismissal(type, sessionId)
             }
-            runCatching { context.applicationContext.stopService(Intent(context, OverlayAlertService::class.java)) }
         }
     }
 }

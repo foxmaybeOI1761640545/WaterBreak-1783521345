@@ -28,10 +28,13 @@ export interface ReminderConfig {
   screenCustomSoundUri?: string
   screenCustomSoundName?: string
   screenVolumePercent: number
-  screenCyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  screenCyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'blocked_admin' | 'grace'
   screenCycleLimit?: number
   screenCycleActiveSessionId?: string
   screenCycleSessionStartedAt?: number
+  screenCycleId?: string
+  screenCycleStartedAt?: number
+  screenCycleUpdatedAt?: number
   waterAlarmScheduled?: boolean
   waterAlarmExact?: boolean
   waterAlarmReason?: string
@@ -76,10 +79,24 @@ export interface ScreenStateStatus {
   trackingReliable?: boolean
   cycleCancelCount?: number
   cycleLimit?: number
-  cyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  cyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'blocked_admin' | 'grace'
   cycleActiveSessionId?: string
   cycleSessionStartedAt?: number
+  cycleId?: string
+  cycleStartedAt?: number
+  cycleUpdatedAt?: number
+  updatedAt?: number
   trackingNote: string
+}
+
+export interface ScreenDashboardState extends ScreenStateStatus {
+  screenLimitEnabled: boolean
+  screenOnLimitMinutes: number
+  requiredScreenOffMinutes: number
+  cancelBeforeLockCount: number
+  screenSoundMode: ReminderSoundMode
+  screenCustomSoundName?: string
+  screenVolumePercent: number
 }
 
 export interface AlertResult {
@@ -116,6 +133,7 @@ export interface WaterReminderPlugin {
   saveCustomSound(payload: CustomSoundPayload): Promise<ReminderStatus>
   useDefaultSound(payload?: ReminderTypePayload): Promise<ReminderStatus>
   getScreenState(): Promise<ScreenStateStatus>
+  getScreenDashboardState(): Promise<ScreenDashboardState>
   requestNotificationPermission(): Promise<PermissionStatus>
   getPermissionStatus(): Promise<PermissionStatus>
   openExactAlarmSettings(): Promise<SettingsLaunchResult>

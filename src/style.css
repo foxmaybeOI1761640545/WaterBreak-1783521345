@@ -168,26 +168,54 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
   .compact-note { margin-top:6px; }
 }
 
-/* Unified compact dashboards for water and screen home pages. */
-.dashboard-card { padding:14px; margin-bottom:10px; }
-.dashboard-title { flex-wrap:nowrap; min-width:0; }
-.dashboard-title h2 { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.dashboard-title > div { flex:0 0 auto; min-width:0; flex-wrap:nowrap; }
-.compact-status { max-width:72px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; justify-content:center; padding-inline:10px; }
-.permission-mini { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 8px; padding:8px 10px; border-radius:12px; background:#f4fbfe; }
-.permission-mini span { min-width:0; color:#557083; font-size:.84rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dashboard-card .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }
-.dashboard-card .summary-grid div { min-width:0; padding:9px; border-radius:12px; }
-.dashboard-card .summary-grid strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; overflow-wrap:anywhere; }
-@media (max-width: 640px) {
-  .dashboard-card { padding:10px; }
-  .dashboard-title { gap:6px; margin-bottom:8px; }
-  .dashboard-title > div { gap:5px; }
-  .dashboard-title h2 { font-size:1.05rem; }
-  .mini-button { padding:6px 8px; font-size:.78rem; }
-  .compact-status { max-width:58px; padding:6px 8px; font-size:.78rem; }
-  .permission-mini { padding:7px 8px; }
-  .permission-mini span { font-size:.78rem; }
-  .dashboard-card .summary-grid span { font-size:.72rem; }
-  .dashboard-card .summary-grid strong { font-size:.86rem; }
+/* Unified compact dashboards. */
+.app-content.main-dashboard { padding-top:10px; padding-bottom:10px; }
+.compact-dashboard-card { padding:14px; margin-bottom:10px; }
+.dashboard-card-title { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; min-width:0; }
+.dashboard-card-title h2 { margin:0; min-width:0; flex:0 1 auto; white-space:nowrap; font-size:1.22rem; line-height:1.15; }
+.dashboard-card-title > div { display:flex; align-items:center; justify-content:flex-end; flex:0 0 auto; gap:6px; flex-wrap:nowrap; }
+.status-pill.compact-status { flex:0 0 auto; padding:6px 9px; white-space:nowrap; font-size:.82rem; line-height:1; }
+.dashboard-note { margin:0 0 8px; color:#557083; font-size:.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dashboard-warning { margin:0 0 8px; padding:7px 9px; border-radius:10px; background:#fff7ed; color:#b45309; font-size:.78rem; }
+.compact-dashboard-card .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.compact-dashboard-card .summary-grid div { min-width:0; padding:8px 9px; border-radius:12px; }
+.compact-dashboard-card .summary-grid span { margin-bottom:4px; font-size:.72rem; }
+.compact-dashboard-card .summary-grid strong { display:block; min-width:0; font-size:.86rem; line-height:1.25; overflow:hidden; text-overflow:ellipsis; overflow-wrap:anywhere; }
+.compact-actions { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:8px 0; }
+.compact-actions button { min-height:48px; padding:10px 8px; }
+.screen-card-title { margin-bottom:8px; }
+.screen-card-title h2 { white-space:nowrap; flex-shrink:0; }
+.screen-card-title > div { flex-wrap:nowrap; }
+.compact-note { margin:6px 0 0; font-size:.78rem; line-height:1.25; }
+.snackbar { pointer-events:none; }
+
+@media (max-width:640px) {
+  .app-content.main-dashboard { padding-top:8px; padding-bottom:8px; }
+  .compact-dashboard-card { padding:10px; border-radius:16px; }
+  .dashboard-card-title { gap:5px; margin-bottom:7px; }
+  .dashboard-card-title h2 { font-size:1.08rem; letter-spacing:-.02em; }
+  .dashboard-card-title > div { gap:4px; }
+  .mini-button { padding:6px 8px; border-radius:10px; font-size:.76rem; }
+  .status-pill.compact-status { padding:5px 7px; font-size:.76rem; }
+  .dashboard-note { margin-bottom:7px; font-size:.76rem; }
+  .compact-dashboard-card .summary-grid { gap:6px; }
+  .compact-dashboard-card .summary-grid div { padding:7px 8px; }
+  .compact-dashboard-card .summary-grid span { font-size:.68rem; }
+  .compact-dashboard-card .summary-grid strong { font-size:.8rem; }
+  .compact-actions { margin:7px 0; gap:7px; }
+  .compact-actions button { min-height:44px; padding:9px 6px; font-size:.9rem; }
+  .compact-note { margin-top:5px; font-size:.72rem; }
+}
+
+@media (max-width:360px) {
+  .app-shell { padding:0 8px; }
+  .top-bar { min-height:62px; padding-bottom:7px; }
+  .top-bar h1 { font-size:1.34rem; }
+  .icon-button { width:40px; height:40px; }
+  .dashboard-card-title h2 { font-size:1rem; }
+  .mini-button { padding:5px 7px; }
+  .status-pill.compact-status { padding:5px 6px; }
+  .compact-dashboard-card .summary-grid strong { font-size:.76rem; }
+  .bottom-tabs { padding:6px; gap:6px; }
+  .bottom-tabs button { padding:7px 5px; }
 }

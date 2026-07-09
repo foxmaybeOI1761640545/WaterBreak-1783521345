@@ -31,13 +31,17 @@ object ScreenStateTracker {
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
-            val now = System.currentTimeMillis()
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_ON -> recordState(context, "on", now)
-                Intent.ACTION_SCREEN_OFF -> recordState(context, "off", now)
-                else -> return
+            runCatching {
+                val now = System.currentTimeMillis()
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> recordState(context, "on", now)
+                    Intent.ACTION_SCREEN_OFF -> recordState(context, "off", now)
+                    else -> return
+                }
+                evaluateAndAlert(context, forceDue = true)
+            }.onFailure {
+                ScreenOnLimitAlarmScheduler.reschedule(context.applicationContext, forceRecalculate = true)
             }
-            evaluateAndAlert(context, forceDue = true)
         }
     }
 
@@ -82,6 +86,10 @@ object ScreenStateTracker {
             put("cyclePhase", cycle.phase)
             put("cycleActiveSessionId", cycle.activeSessionId)
             put("cycleSessionStartedAt", cycle.sessionStartedAt)
+            put("cycleId", cycle.cycleId)
+            put("cycleStartedAt", cycle.cycleStartedAt)
+            put("cycleUpdatedAt", cycle.cycleUpdatedAt)
+            put("updatedAt", now)
             put("trackingReliable", usagePermission)
             put(
                 "trackingNote",
@@ -91,6 +99,19 @@ object ScreenStateTracker {
                     "未授予使用情况访问权限。为防止错误累计，监听中断后会从重新确认状态的时间开始计算。"
                 },
             )
+        }
+    }
+
+    fun dashboardStatus(context: Context): JSObject {
+        val config = ReminderPreferences.read(context.applicationContext)
+        return status(context).apply {
+            put("screenLimitEnabled", config.screenLimitEnabled)
+            put("screenOnLimitMinutes", config.screenOnLimitMinutes)
+            put("requiredScreenOffMinutes", config.requiredScreenOffMinutes)
+            put("cancelBeforeLockCount", config.cancelBeforeLockCount)
+            put("screenSoundMode", config.screenSoundMode)
+            put("screenCustomSoundName", config.screenCustomSoundName)
+            put("screenVolumePercent", config.screenVolumePercent)
         }
     }
 
@@ -237,24 +258,29 @@ object ScreenStateTracker {
         return decision.shouldAlert
     }
 
-    fun recordScreenAlertCancel(context: Context, sessionId: String = ""): Boolean {
+    fun recordScreenAlertCancel(context: Context, sessionId: String = ""): ScreenAlertCancelResult {
         val appContext = context.applicationContext
         val config = ReminderPreferences.read(appContext)
         val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val (accepted, shouldLock) = ReminderLockHelper.consumeSessionAndShouldLock(appContext, sessionId, config)
-        if (!accepted) return false
+        val consumed = ReminderLockHelper.consumeSession(appContext, sessionId, config)
+        if (!consumed.accepted) return consumed
+
         val now = System.currentTimeMillis()
         val next = now + config.screenOnLimitMinutes.coerceAtLeast(0) * 60_000L
         prefs.edit()
             .putBoolean(KEY_REST_REQUIRED, true)
             .putLong(KEY_NEXT_ALLOWED_ALERT_AT, next)
             .putLong(KEY_NEXT_SCREEN_CHECK_AT, next)
-            
             .commit()
-        AlertCoordinator.dismissScreenAlert(appContext, sessionId)
-        if (shouldLock) executeForceLock(appContext)
-        ScreenOnLimitAlarmScheduler.scheduleAt(appContext, if (shouldLock) now + ReminderLockHelper.MIN_LOCK_RETRY_INTERVAL_MS else next)
-        return shouldLock
+
+        val lockResult = if (consumed.shouldForceLock) executeForceLock(appContext, closeActivity = false) else LockAttemptResult()
+        val nextCheck = when {
+            !consumed.shouldForceLock -> next
+            lockResult.needsAdmin -> now + 5L * 60L * 1000L
+            else -> now + ReminderLockHelper.FORCE_LOCK_RECHECK_INTERVAL_MS
+        }
+        ScreenOnLimitAlarmScheduler.scheduleAt(appContext, nextCheck)
+        return consumed.copy(lockResult = lockResult)
     }
 
     fun resetForConfigChange(context: Context) {
@@ -288,11 +314,14 @@ object ScreenStateTracker {
         ScreenOnLimitAlarmScheduler.cancel(appContext)
     }
 
-    private fun executeForceLock(context: Context) {
-        ReminderLockHelper.activateForceLock(context)
-        AlertCoordinator.dismissScreenAlert(context)
-        NotificationHelper.vibrateAlert(context)
-        ReminderLockHelper.lockNow(context)
+    fun retryForceLock(context: Context): LockAttemptResult = executeForceLock(context.applicationContext, closeActivity = true)
+
+    private fun executeForceLock(context: Context, closeActivity: Boolean = true): LockAttemptResult {
+        val appContext = context.applicationContext
+        ReminderLockHelper.activateForceLock(appContext)
+        AlertCoordinator.dismissScreenAlert(appContext, closeActivity = closeActivity)
+        NotificationHelper.vibrateAlert(appContext)
+        return ReminderLockHelper.tryLockNow(appContext)
     }
 
     private fun ensureInitialState(context: Context) {

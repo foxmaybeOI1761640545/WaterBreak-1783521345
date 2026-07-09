@@ -6,6 +6,9 @@ data class ScreenCycleSnapshot(
     val phase: String,
     val activeSessionId: String,
     val sessionStartedAt: Long,
+    val cycleId: String = "",
+    val cycleStartedAt: Long = 0L,
+    val cycleUpdatedAt: Long = 0L,
 ) {
     val inActiveCycle: Boolean get() = phase != PHASE_IDLE
 
@@ -14,6 +17,7 @@ data class ScreenCycleSnapshot(
         const val PHASE_ALERTING = "alerting"
         const val PHASE_WAITING_REST = "waiting_rest"
         const val PHASE_FORCE_LOCK = "force_lock"
+        const val PHASE_BLOCKED_ADMIN = "blocked_admin"
         const val PHASE_GRACE = "grace"
     }
 }

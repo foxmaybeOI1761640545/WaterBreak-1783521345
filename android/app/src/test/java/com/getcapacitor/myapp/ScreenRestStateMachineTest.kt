@@ -22,6 +22,11 @@ class ScreenRestStateMachineTest {
         val decision = ScreenRestStateMachine.evaluate(snapshot(state = "on", now = now, lastScreenOn = 1_000L, limit = 5, restRequired = true, cancelCount = 1, nextAllowedAlertAt = 12 * minute))
         assertFalse(decision.shouldAlert); assertEquals(12 * minute, decision.nextScreenCheckAt)
     }
+    @Test fun countAtThresholdWithoutPersistedForceFlagDoesNotInventForceLock() {
+        val decision = ScreenRestStateMachine.evaluate(snapshot(state = "on", now = 20 * minute, lastScreenOn = 19 * minute, forceLockActive = false, cancelCount = 3, cancelBeforeLockCount = 3))
+        assertFalse(decision.forceLockActive)
+        assertFalse(decision.shouldForceLock)
+    }
     @Test fun forceLockRestoredOnUnlock() {
         val decision = ScreenRestStateMachine.evaluate(snapshot(state = "on", now = 20 * minute, lastScreenOn = 19 * minute, forceLockActive = true, cancelCount = 3))
         assertTrue(decision.forceLockActive); assertTrue(decision.shouldForceLock); assertFalse(decision.shouldAlert)
