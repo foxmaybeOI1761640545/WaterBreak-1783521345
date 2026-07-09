@@ -213,7 +213,7 @@ object NotificationHelper {
             if (type == ReminderType.WATER) "喝水提醒" else "亮屏超时提醒",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = if (type == ReminderType.WATER) "随机喝水提醒通知" else "亮屏时间过长提醒通知"
+            description = if (type == ReminderType.WATER) "水息守护喝水提醒通知" else "水息守护亮屏时间过长提醒通知"
             enableVibration(false)
             setSound(null, null)
         }

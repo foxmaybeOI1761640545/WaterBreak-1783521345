@@ -2,7 +2,7 @@ import { registerPlugin } from '@capacitor/core'
 
 export type ReminderSoundMode = 'default' | 'custom'
 export type ReminderType = 'water' | 'screen_limit'
-export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown'
+export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown' | 'unavailable'
 
 export interface ReminderConfig {
   enabled: boolean
@@ -55,6 +55,9 @@ export interface PermissionStatus {
   waterChannelImportance?: number
   screenChannelEnabled?: boolean
   screenChannelImportance?: number
+  deviceAdmin?: PermissionValue
+  batteryOptimization?: PermissionValue
+  manufacturerSettingsAvailable?: boolean
 }
 
 export interface ScreenStateStatus {
@@ -110,6 +113,9 @@ export interface WaterReminderPlugin {
   openOverlaySettings(): Promise<{ opened: boolean }>
   openUsageAccessSettings(): Promise<{ opened: boolean }>
   openFullScreenIntentSettings(): Promise<{ opened: boolean }>
+  openDeviceAdminSettings(): Promise<{ opened: boolean }>
+  openAppDetailsSettings(): Promise<{ opened: boolean }>
+  openManufacturerPermissionSettings(): Promise<{ opened: boolean }>
 }
 
 export const WaterReminder = registerPlugin<WaterReminderPlugin>('WaterReminder')

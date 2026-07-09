@@ -115,3 +115,18 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
   .status-pill { padding: 6px 10px; }
   .message, .hint { margin: 8px 0; }
 }
+.permission-guide .guide-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; }
+.permission-guide h2 { margin-bottom:6px; }
+.permission-guide p { margin:0; color:#557083; }
+.permission-list { display:grid; gap:8px; margin-top:14px; }
+.permission-row { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 12px; border-radius:14px; background:#f4fbfe; }
+.permission-row span { display:flex; flex-direction:column; gap:3px; }
+.permission-row small { color:#6a8292; line-height:1.35; }
+.permission-row em { font-style:normal; font-weight:900; white-space:nowrap; }
+.permission-row em.ok { color:#15803d; }
+.permission-row em.pending { color:#a16207; }
+.permission-row em.missing { color:#b91c1c; }
+.guide-current { margin-top:14px; border:1px solid #bfdeea; border-radius:16px; padding:12px; display:grid; gap:10px; background:#fbfeff; }
+.guide-current span { color:#557083; }
+.guide-current div { display:flex; flex-wrap:wrap; gap:8px; }
+@media (max-width: 640px) { .permission-guide .guide-header, .permission-row { align-items:stretch; flex-direction:column; } .permission-row em { align-self:flex-start; } }

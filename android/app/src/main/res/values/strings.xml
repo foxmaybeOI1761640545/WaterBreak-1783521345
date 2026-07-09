@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">随机喝水提醒</string>
-    <string name="title_activity_main">随机喝水提醒</string>
+    <string name="app_name">水息守护</string>
+    <string name="title_activity_main">水息守护</string>
     <string name="package_name">com.randomwaterreminder.app</string>
     <string name="custom_url_scheme">com.randomwaterreminder.app</string>
 </resources>

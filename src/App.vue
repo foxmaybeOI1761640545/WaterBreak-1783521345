@@ -2,10 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { App as CapacitorApp } from '@capacitor/app'
 import type { PluginListenerHandle } from '@capacitor/core'
-import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type ScreenStateStatus, type ReminderType } from './plugins/WaterReminder'
+import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType } from './plugins/WaterReminder'
 
 type MainPage = 'water' | 'screen'
 type AppPage = MainPage | 'waterSettings' | 'screenSettings'
+type PermissionGuideKey = 'notifications' | 'exact' | 'overlay' | 'usage' | 'fullScreen' | 'waterNotification' | 'screenNotification' | 'deviceAdmin' | 'manufacturer'
+interface PermissionGuideItem { key: PermissionGuideKey; title: string; purpose: string; status: PermissionValue; applicable: boolean }
 
 interface State {
   loading: boolean
@@ -18,28 +20,31 @@ interface State {
   nextReminderInput: string
   activePage: AppPage
   settingsSource: MainPage
+  permissionGuideActive: boolean
+  permissionGuideIndex: number
+  permissionGuideSkipped: PermissionGuideKey[]
   status: ReminderStatus
 }
 
 const defaultStatus: ReminderStatus = {
   enabled: false,
-  startHour: 8,
-  startMinute: 0,
-  endHour: 22,
-  endMinute: 0,
-  minIntervalMinutes: 60,
-  maxIntervalMinutes: 120,
+  startHour: 6,
+  startMinute: 35,
+  endHour: 23,
+  endMinute: 45,
+  minIntervalMinutes: 35,
+  maxIntervalMinutes: 45,
   nextReminderTime: 0,
   waterNotificationTitle: '该喝水啦',
-  waterNotificationText: '起来喝一杯水，休息一下眼睛。',
+  waterNotificationText: '稳健做人，认真做事。',
   waterSoundMode: 'default',
   waterCustomSoundUri: '',
   waterCustomSoundName: '',
   waterVolumePercent: 100,
-  screenLimitEnabled: false,
-  screenOnLimitMinutes: 0,
+  screenLimitEnabled: true,
+  screenOnLimitMinutes: 5,
   requiredScreenOffMinutes: 5,
-  cancelBeforeLockCount: 3,
+  cancelBeforeLockCount: 5,
   cancelCycleCount: 0,
   screenSoundMode: 'default',
   screenCustomSoundUri: '',
@@ -58,6 +63,9 @@ const state = reactive<State>({
   nextReminderInput: '',
   activePage: 'water',
   settingsSource: 'water',
+  permissionGuideActive: false,
+  permissionGuideIndex: 0,
+  permissionGuideSkipped: [],
   status: { ...defaultStatus },
 })
 
@@ -77,8 +85,8 @@ const currentScreenDurationText = computed(() => {
 const lastScreenOnText = computed(() => formatTimestamp(state.screenState?.lastScreenOnTime || 0))
 const lastScreenOffText = computed(() => formatTimestamp(state.screenState?.lastScreenOffTime || 0))
 const cancelCycleText = computed(() => {
-  const total = state.status.cancelBeforeLockCount || 1
-  const current = Math.min((state.status.cancelCycleCount || 0), total)
+  const total = state.status.cancelBeforeLockCount ?? 1
+  const current = Math.min((state.status.cancelCycleCount ?? 0), total)
   return current > 0 ? `已取消 ${current} / ${total} 次` : '未进入提醒循环'
 })
 const isSettingsPage = computed(() => state.activePage === 'waterSettings' || state.activePage === 'screenSettings')
@@ -86,6 +94,7 @@ const isSettingsPage = computed(() => state.activePage === 'waterSettings' || st
 let ticker: number | undefined
 let screenRefreshTicker: number | undefined
 let backButtonHandle: PluginListenerHandle | undefined
+let appStateHandle: PluginListenerHandle | undefined
 const contentScroller = ref<HTMLElement | null>(null)
 const touchStart = reactive({ x: 0, y: 0, active: false })
 
@@ -103,7 +112,7 @@ function formatDuration(durationMs: number) {
   return `${seconds} 秒`
 }
 function formatNextReminder(timestamp: number) {
-  if (!timestamp) return '未安排'
+  if (timestamp == null || timestamp <= 0) return '未安排'
   const target = new Date(timestamp)
   const now = new Date()
   const tomorrow = new Date(now)
@@ -123,15 +132,15 @@ function buildConfig(overrides: Partial<ReminderConfig> = {}): ReminderConfig {
     maxIntervalMinutes: Number(state.status.maxIntervalMinutes),
     nextReminderTime: parseNextReminderInput(),
     waterNotificationTitle: state.status.waterNotificationTitle.trim() || '该喝水啦',
-    waterNotificationText: state.status.waterNotificationText.trim() || '起来喝一杯水，休息一下眼睛。',
+    waterNotificationText: state.status.waterNotificationText.trim() || '稳健做人，认真做事。',
     waterSoundMode: state.status.waterSoundMode,
     waterCustomSoundUri: state.status.waterCustomSoundUri,
     waterCustomSoundName: state.status.waterCustomSoundName,
     waterVolumePercent: Number(state.status.waterVolumePercent ?? 100),
     screenLimitEnabled: Boolean(state.status.screenLimitEnabled),
-    screenOnLimitMinutes: Number(state.status.screenOnLimitMinutes || 0),
-    requiredScreenOffMinutes: Number(state.status.requiredScreenOffMinutes || 5),
-    cancelBeforeLockCount: Number(state.status.cancelBeforeLockCount || 3),
+    screenOnLimitMinutes: Number(state.status.screenOnLimitMinutes ?? 5),
+    requiredScreenOffMinutes: Number(state.status.requiredScreenOffMinutes ?? 5),
+    cancelBeforeLockCount: Number(state.status.cancelBeforeLockCount ?? 5),
     screenSoundMode: state.status.screenSoundMode,
     screenCustomSoundUri: state.status.screenCustomSoundUri,
     screenCustomSoundName: state.status.screenCustomSoundName,
@@ -231,7 +240,7 @@ function updateTime(kind: 'start' | 'end', event: Event) {
 }
 
 function updateNextReminderInput() { state.nextReminderInput = state.status.nextReminderTime ? toDateTimeLocalValue(state.status.nextReminderTime) : '' }
-function parseNextReminderInput() { const parsed = state.nextReminderInput ? new Date(state.nextReminderInput).getTime() : 0; return Number.isFinite(parsed) ? parsed : state.status.nextReminderTime || 0 }
+function parseNextReminderInput() { const parsed = state.nextReminderInput ? new Date(state.nextReminderInput).getTime() : 0; return Number.isFinite(parsed) ? parsed : (state.status.nextReminderTime ?? 0) }
 function toDateTimeLocalValue(timestamp: number) { const date = new Date(timestamp); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) }
 
 async function refreshScreenStateOnly() { try { state.screenState = await WaterReminder.getScreenState() } catch { /* keep current UI */ } }
@@ -268,7 +277,43 @@ async function disableReminder() {
 function enableScreenLimit() { return saveConfig('屏幕超时提醒已开启', { screenLimitEnabled: true }) }
 function disableScreenLimit() { return saveConfig('屏幕超时提醒已关闭', { screenLimitEnabled: false }) }
 
-async function openPermissionSettings(kind: 'exact' | 'overlay' | 'usage' | 'fullScreen' | 'waterNotification' | 'screenNotification') {
+
+const permissionGuideItems = computed<PermissionGuideItem[]>(() => {
+  const p = state.permissions
+  const channelReady = (kind: 'water' | 'screen') => kind === 'water' ? Boolean(p?.waterChannelEnabled) : Boolean(p?.screenChannelEnabled)
+  return [
+    { key: 'notifications' as PermissionGuideKey, title: '通知运行时权限', purpose: '用于发送喝水和屏幕提醒通知。', status: p?.notifications ?? 'unknown', applicable: true },
+    { key: 'exact' as PermissionGuideKey, title: '精确闹钟', purpose: '应用被划掉后仍按计划触发提醒。', status: p?.exactAlarms ?? 'unknown', applicable: p?.exactAlarms !== 'unavailable' },
+    { key: 'overlay' as PermissionGuideKey, title: '悬浮窗', purpose: '屏幕超时提醒时显示悬浮操作按钮。', status: p?.overlays ?? 'unknown', applicable: p?.overlays !== 'unavailable' },
+    { key: 'usage' as PermissionGuideKey, title: '使用情况访问', purpose: '恢复进程后校准亮屏/息屏记录。', status: p?.usageStats ?? 'unknown', applicable: p?.usageStats !== 'unavailable' },
+    { key: 'fullScreen' as PermissionGuideKey, title: '全屏提醒', purpose: '锁屏或息屏时尽可能弹出居中提醒。', status: p?.fullScreenIntent ?? 'unknown', applicable: p?.fullScreenIntent !== 'unavailable' },
+    { key: 'waterNotification' as PermissionGuideKey, title: '喝水通知渠道', purpose: '确保喝水提醒渠道未被关闭。', status: channelReady('water') ? 'granted' : 'denied', applicable: true },
+    { key: 'screenNotification' as PermissionGuideKey, title: '屏幕通知渠道', purpose: '确保屏幕提醒渠道未被关闭。', status: channelReady('screen') ? 'granted' : 'denied', applicable: true },
+    { key: 'deviceAdmin' as PermissionGuideKey, title: '设备管理器锁屏权限', purpose: '连续取消屏幕提醒达到阈值后执行系统锁屏。', status: p?.deviceAdmin ?? 'unknown', applicable: true },
+    { key: 'manufacturer' as PermissionGuideKey, title: '省电/自启动/后台弹出建议项', purpose: 'MIUI/HyperOS 等系统上提升后台提醒稳定性。', status: 'prompt' as const, applicable: Boolean(p?.manufacturerSettingsAvailable) },
+  ]
+})
+const permissionGuideCurrent = computed(() => permissionGuideItems.value[state.permissionGuideIndex])
+function permissionStatusText(status: PermissionValue) { return status === 'granted' ? '已完成' : status === 'unavailable' ? '无需设置' : status === 'prompt' ? '待设置' : status === 'unknown' ? '未知' : '待设置' }
+function permissionStatusClass(status: PermissionValue) { return status === 'granted' || status === 'unavailable' ? 'ok' : status === 'prompt' || status === 'unknown' ? 'pending' : 'missing' }
+function guideDisplayStatus(item: { applicable: boolean; status: PermissionValue }) { return item.applicable ? item.status : 'unavailable' }
+function nextMissingPermissionIndex(from = 0) { return permissionGuideItems.value.findIndex((item, index) => index >= from && item.applicable && item.status !== 'granted' && item.status !== 'unavailable' && !state.permissionGuideSkipped.includes(item.key)) }
+async function startPermissionGuide() { state.permissionGuideActive = true; state.permissionGuideSkipped = []; await refreshStatus(); state.permissionGuideIndex = Math.max(0, nextMissingPermissionIndex(0)); await continuePermissionGuide() }
+async function continuePermissionGuide() {
+  await refreshStatus()
+  const next = nextMissingPermissionIndex(state.permissionGuideIndex)
+  if (next < 0) { state.permissionGuideActive = false; state.message = '权限向导已完成或已跳过当前缺失项'; return }
+  state.permissionGuideIndex = next
+  const item = permissionGuideItems.value[next]
+  if (item.key === 'notifications') {
+    state.permissions = await WaterReminder.requestNotificationPermission()
+    if (state.permissions.notifications === 'granted') { state.permissionGuideIndex += 1; await continuePermissionGuide() }
+  } else await openPermissionSettings(item.key as Exclude<PermissionGuideKey, 'notifications'>, true)
+}
+function skipPermissionGuideItem() { const item = permissionGuideCurrent.value; if (item) state.permissionGuideSkipped.push(item.key); state.permissionGuideIndex += 1; continuePermissionGuide() }
+function stopPermissionGuide() { state.permissionGuideActive = false; state.message = '已退出权限向导，可稍后继续配置' }
+
+async function openPermissionSettings(kind: Exclude<PermissionGuideKey, 'notifications'>, fromGuide = false) {
   try {
     if (kind === 'exact') await WaterReminder.openExactAlarmSettings()
     if (kind === 'overlay') await WaterReminder.openOverlaySettings()
@@ -276,7 +321,9 @@ async function openPermissionSettings(kind: 'exact' | 'overlay' | 'usage' | 'ful
     if (kind === 'fullScreen') await WaterReminder.openFullScreenIntentSettings()
     if (kind === 'waterNotification') await WaterReminder.openNotificationSettings({ type: 'water' })
     if (kind === 'screenNotification') await WaterReminder.openNotificationSettings({ type: 'screen_limit' })
-    state.message = '已打开对应系统设置，授权后请返回应用刷新状态'
+    if (kind === 'deviceAdmin') await WaterReminder.openDeviceAdminSettings()
+    if (kind === 'manufacturer') await WaterReminder.openManufacturerPermissionSettings()
+    state.message = fromGuide ? '已打开系统设置；返回应用后会刷新状态，可继续、跳过或退出' : '已打开对应系统设置，授权后请返回应用刷新状态'
   } catch (error) {
     state.message = error instanceof Error ? error.message : '无法打开系统设置'
   }
@@ -312,7 +359,7 @@ async function importCustomSound(type: ReminderType, event: Event) {
 function isSupportedAudioFile(file: File) { return file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) }
 function inferAudioMimeType(fileName: string) { return ({ mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[fileName.split('.').pop()?.toLowerCase() || ''] || 'audio/mpeg' }
 function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '').split(',').pop() || ''); reader.onerror = () => reject(new Error('读取音频文件失败')); reader.readAsDataURL(file) }) }
-function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); refreshStatus() } }
+function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); refreshStatus().then(() => { if (state.permissionGuideActive) { const next = nextMissingPermissionIndex(state.permissionGuideIndex); if (next < 0) state.permissionGuideActive = false; else if (next > state.permissionGuideIndex) { state.permissionGuideIndex = next; continuePermissionGuide() } else state.permissionGuideIndex = next } }) } }
 
 onMounted(() => {
   refreshStatus()
@@ -322,6 +369,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('popstate', handlePopState)
   CapacitorApp.addListener('backButton', () => navigateBack()).then(handle => { backButtonHandle = handle })
+  CapacitorApp.addListener('appStateChange', ({ isActive }) => { if (isActive) handleVisibilityChange() }).then(handle => { appStateHandle = handle })
 })
 onUnmounted(() => {
   if (ticker) window.clearInterval(ticker)
@@ -329,6 +377,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('popstate', handlePopState)
   backButtonHandle?.remove()
+  appStateHandle?.remove()
 })
 </script>
 
@@ -336,7 +385,7 @@ onUnmounted(() => {
   <div class="app-shell">
     <header class="top-bar">
       <div>
-        <p class="eyebrow">随机喝水提醒</p>
+        <p class="eyebrow">水息守护</p>
         <h1>{{ pageTitle }}</h1>
       </div>
       <button v-if="isSettingsPage" class="icon-button" aria-label="返回" @click="closeSettings">←</button>
@@ -344,6 +393,11 @@ onUnmounted(() => {
     </header>
 
     <main ref="contentScroller" class="app-content" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
+      <section class="card permission-guide">
+        <div class="guide-header"><div><h2>一键配置所需权限</h2><p>逐项引导到系统官方设置页，返回后自动刷新状态。</p></div><button :disabled="state.loading || state.saving" @click="startPermissionGuide">开始配置</button></div>
+        <div v-if="state.permissionGuideActive && permissionGuideCurrent" class="guide-current"><strong>当前：{{ permissionGuideCurrent.title }}</strong><span>{{ permissionGuideCurrent.purpose }}</span><div><button class="ghost" @click="continuePermissionGuide">重试/继续</button><button class="ghost" @click="skipPermissionGuideItem">跳过</button><button class="secondary" @click="stopPermissionGuide">退出</button></div></div>
+        <div class="permission-list"><div v-for="item in permissionGuideItems" :key="item.key" class="permission-row"><span><strong>{{ item.title }}</strong><small>{{ item.purpose }}</small></span><em :class="permissionStatusClass(guideDisplayStatus(item))">{{ permissionStatusText(guideDisplayStatus(item)) }}</em></div></div>
+      </section>
       <template v-if="state.activePage === 'water'">
         <section class="hero card">
           <p class="subtitle">到点后会显示喝水提醒弹窗，确认后关闭；不会触发熄屏或取消计数。</p>

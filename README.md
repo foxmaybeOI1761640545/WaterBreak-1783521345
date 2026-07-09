@@ -1,4 +1,4 @@
-# Random Water Reminder
+# 水息守护
 
 使用 Vue 3、Vite、TypeScript、Capacitor Android 与 Kotlin Capacitor Plugin 开发的 Android 喝水及亮屏超时提醒应用。
 

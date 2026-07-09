@@ -1,10 +1,13 @@
 package com.randomwaterreminder.app
 
 import android.Manifest
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Base64
 import android.webkit.MimeTypeMap
@@ -278,6 +281,55 @@ class WaterReminderPlugin : Plugin() {
             .onFailure { call.reject(it.message ?: "无法打开全屏提醒设置") }
     }
 
+
+
+    @PluginMethod
+    fun openDeviceAdminSettings(call: PluginCall) {
+        runCatching {
+            context.startActivity(
+                Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(context, ReminderDeviceAdminReceiver::class.java))
+                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于连续取消屏幕提醒后执行系统锁屏。")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }.onSuccess { call.resolve(JSObject().put("opened", true)) }
+            .onFailure { openAppDetails(call, it.message ?: "无法打开设备管理器设置") }
+    }
+
+    @PluginMethod
+    fun openAppDetailsSettings(call: PluginCall) {
+        openAppDetails(call, "无法打开应用详情设置")
+    }
+
+    @PluginMethod
+    fun openManufacturerPermissionSettings(call: PluginCall) {
+        val intents = listOf(
+            Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                putExtra("extra_pkgname", context.packageName)
+            },
+            Intent("miui.intent.action.OP_AUTO_START").apply {
+                setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            },
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") },
+        ).map { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        val opened = intents.any { intent -> runCatching { context.startActivity(intent) }.isSuccess }
+        if (opened) call.resolve(JSObject().put("opened", true)) else openAppDetails(call, "无法打开厂商权限设置")
+    }
+
+    private fun openAppDetails(call: PluginCall, fallbackMessage: String) {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }.onSuccess { call.resolve(JSObject().put("opened", true).put("fallback", true)) }
+            .onFailure { call.reject(fallbackMessage) }
+    }
+
     @PluginMethod
     fun requestNotificationPermission(call: PluginCall) {
         if (
@@ -301,13 +353,18 @@ class WaterReminderPlugin : Plugin() {
     }
 
     private fun permissionStatus(): JSObject {
-        val exactAlarms = if (WaterReminderScheduler.canScheduleExact(context)) "granted" else "denied"
-        val notifications = if (NotificationHelper.hasNotificationPermission(context)) "granted" else "denied"
-        val fullScreenIntent = if (NotificationHelper.canUseFullScreenIntent(context)) "granted" else "denied"
+        val exactAlarms = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) "unavailable" else if (WaterReminderScheduler.canScheduleExact(context)) "granted" else "denied"
+        val notifications = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) "granted" else if (NotificationHelper.hasNotificationPermission(context)) "granted" else "denied"
+        val fullScreenIntent = if (Build.VERSION.SDK_INT < 34) "unavailable" else if (NotificationHelper.canUseFullScreenIntent(context)) "granted" else "denied"
         val overlays = if (Settings.canDrawOverlays(context)) "granted" else "denied"
         val usageStats = if (ScreenUsageEventReader.hasPermission(context)) "granted" else "denied"
         val waterChannel = NotificationHelper.channelStatus(context, ReminderType.WATER)
         val screenChannel = NotificationHelper.channelStatus(context, ReminderType.SCREEN_LIMIT)
+        val deviceAdmin = if (ReminderLockHelper.isDeviceAdminActive(context)) "granted" else "denied"
+        val batteryOptimization = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (powerManager.isIgnoringBatteryOptimizations(context.packageName)) "granted" else "prompt"
+        } else "unavailable"
         return JSObject().apply {
             put("notifications", notifications)
             put("exactAlarms", exactAlarms)
@@ -318,6 +375,9 @@ class WaterReminderPlugin : Plugin() {
             put("waterChannelImportance", waterChannel.second)
             put("screenChannelEnabled", screenChannel.first)
             put("screenChannelImportance", screenChannel.second)
+            put("deviceAdmin", deviceAdmin)
+            put("batteryOptimization", batteryOptimization)
+            put("manufacturerSettingsAvailable", true)
         }
     }
 
