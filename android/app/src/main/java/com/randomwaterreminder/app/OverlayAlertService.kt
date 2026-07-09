@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import java.lang.ref.WeakReference
 
 class OverlayAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -32,6 +33,11 @@ class OverlayAlertService : Service() {
         if (currentType == ReminderType.SCREEN_LIMIT) AlertCoordinator.dismissScreenAlert(this, sessionId) else AlertCoordinator.dismissAlert(this, currentType)
         removeOverlay()
         stopSelfSafely()
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        activeService = WeakReference(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -179,6 +185,13 @@ class OverlayAlertService : Service() {
         stopSelfSafely()
     }
 
+    private fun dismissIfMatches(type: ReminderType, requestedSessionId: String) {
+        if (type == currentType && (requestedSessionId.isBlank() || requestedSessionId == sessionId)) {
+            removeOverlay()
+            stopSelfSafely()
+        }
+    }
+
     private fun fallbackToNotification(title: String, text: String, config: ReminderConfig, cause: String) {
         stopForegroundCompat(removeNotification = true)
         val notificationResult = NotificationHelper.showReminder(this, currentType, title, text, config)
@@ -218,6 +231,7 @@ class OverlayAlertService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeService?.get() === this) activeService = null
         removeOverlay()
         super.onDestroy()
     }
@@ -243,6 +257,7 @@ class OverlayAlertService : Service() {
         private const val EXTRA_IS_TEST = "isTest"
         private const val EXTRA_SESSION_ID = "sessionId"
         private const val AUTO_DISMISS_MILLIS = 2L * 60L * 1000L
+        @Volatile private var activeService: WeakReference<OverlayAlertService>? = null
 
         fun start(
             context: Context,
@@ -268,15 +283,14 @@ class OverlayAlertService : Service() {
         }
 
         fun dismiss(context: Context, type: ReminderType, sessionId: String = "") {
-            // stopService triggers onDestroy(), which always removes the current overlay.
-            // Avoid starting a background service only to dismiss it.
-            runCatching {
-                ContextCompat.startForegroundService(context.applicationContext, Intent(context, OverlayAlertService::class.java).apply {
-                    action = ACTION_DISMISS
-                    putExtra(EXTRA_TYPE, type.value)
-                    putExtra(EXTRA_SESSION_ID, sessionId)
-                })
-            }.onFailure { runCatching { context.stopService(Intent(context, OverlayAlertService::class.java)) } }
+            // Never start a foreground service only to dismiss an overlay: on Android O+
+            // that path can crash if startForeground() is not called quickly enough.
+            val service = activeService?.get()
+            if (service != null) {
+                service.handler.post { service.dismissIfMatches(type, sessionId) }
+                return
+            }
+            runCatching { context.applicationContext.stopService(Intent(context, OverlayAlertService::class.java)) }
         }
     }
 }

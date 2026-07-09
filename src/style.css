@@ -167,3 +167,27 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
   .compact-screen-card .summary-grid strong { font-size:.86rem; }
   .compact-note { margin-top:6px; }
 }
+
+/* Unified compact dashboards for water and screen home pages. */
+.dashboard-card { padding:14px; margin-bottom:10px; }
+.dashboard-title { flex-wrap:nowrap; min-width:0; }
+.dashboard-title h2 { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dashboard-title > div { flex:0 0 auto; min-width:0; flex-wrap:nowrap; }
+.compact-status { max-width:72px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; justify-content:center; padding-inline:10px; }
+.permission-mini { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 8px; padding:8px 10px; border-radius:12px; background:#f4fbfe; }
+.permission-mini span { min-width:0; color:#557083; font-size:.84rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dashboard-card .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }
+.dashboard-card .summary-grid div { min-width:0; padding:9px; border-radius:12px; }
+.dashboard-card .summary-grid strong { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; overflow-wrap:anywhere; }
+@media (max-width: 640px) {
+  .dashboard-card { padding:10px; }
+  .dashboard-title { gap:6px; margin-bottom:8px; }
+  .dashboard-title > div { gap:5px; }
+  .dashboard-title h2 { font-size:1.05rem; }
+  .mini-button { padding:6px 8px; font-size:.78rem; }
+  .compact-status { max-width:58px; padding:6px 8px; font-size:.78rem; }
+  .permission-mini { padding:7px 8px; }
+  .permission-mini span { font-size:.78rem; }
+  .dashboard-card .summary-grid span { font-size:.72rem; }
+  .dashboard-card .summary-grid strong { font-size:.86rem; }
+}

@@ -120,6 +120,11 @@ object ReminderLockHelper {
         if (!manager.isAdminActive(adminComponent(context))) return false
         manager.lockNow(); return true
     }
-    fun requestDeviceAdmin(activity: Activity) { activity.startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply { putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent(activity)); putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于在连续取消屏幕超时提醒达到设置次数后执行熄屏锁定。") }) }
+    fun deviceAdminIntent(context: Context): Intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+        putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent(context))
+        putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于在连续取消屏幕超时提醒达到设置次数后执行熄屏锁定。")
+    }
+
+    fun requestDeviceAdmin(activity: Activity) { activity.startActivity(deviceAdminIntent(activity)) }
     private fun adminComponent(context: Context) = ComponentName(context, ReminderDeviceAdminReceiver::class.java)
 }
