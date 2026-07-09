@@ -13,12 +13,14 @@ import android.widget.TextView
 import android.widget.Toast
 
 class ReminderAlertActivity : Activity() {
-    private val reminderType: ReminderType by lazy { ReminderType.from(intent.getStringExtra(EXTRA_TYPE)) }
-    private val isTest: Boolean by lazy { intent.getBooleanExtra(EXTRA_IS_TEST, false) }
-    private val sessionId: String by lazy { intent.getStringExtra(EXTRA_SESSION_ID).orEmpty() }
+    private var reminderType: ReminderType = ReminderType.WATER
+    private var isTest: Boolean = false
+    private var sessionId: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        loadIntent(intent)
+        if (intent.action == ACTION_DISMISS) { finishIfSessionMatches(intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()); return }
         val config = ReminderPreferences.read(this)
         val title = intent.getStringExtra(EXTRA_TITLE) ?: if (reminderType == ReminderType.WATER) config.waterNotificationTitle else "亮屏时间过长"
         val text = intent.getStringExtra(EXTRA_TEXT) ?: if (reminderType == ReminderType.WATER) config.waterNotificationText else "已经连续亮屏 ${config.screenOnLimitMinutes} 分钟以上，建议息屏休息一下。"
@@ -26,12 +28,29 @@ class ReminderAlertActivity : Activity() {
         setContentView(buildContent(title, text, reminderType))
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_DISMISS) finishIfSessionMatches(intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()) else loadIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
-        if (pendingLockAfterAdmin && reminderType == ReminderType.SCREEN_LIMIT && ReminderLockHelper.lockNow(this)) {
-            pendingLockAfterAdmin = false
+        if (pendingLockSessionId == sessionId && sessionId.isNotBlank() && reminderType == ReminderType.SCREEN_LIMIT && ReminderLockHelper.forceLockActive(this) && ReminderLockHelper.lockNow(this)) {
+            pendingLockSessionId = ""
+            ScreenStateTracker.recordScreenAlertCancel(this, sessionId)
             finish()
         }
+    }
+
+    private fun loadIntent(source: Intent) {
+        reminderType = ReminderType.from(source.getStringExtra(EXTRA_TYPE))
+        isTest = source.getBooleanExtra(EXTRA_IS_TEST, false)
+        sessionId = source.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+    }
+
+    private fun finishIfSessionMatches(requestedSessionId: String) {
+        if (requestedSessionId.isBlank() || requestedSessionId == sessionId) finish()
     }
 
     private fun buildContent(title: String, text: String, type: ReminderType): LinearLayout {
@@ -115,7 +134,7 @@ class ReminderAlertActivity : Activity() {
             finish()
             return
         }
-        pendingLockAfterAdmin = true
+        pendingLockSessionId = sessionId
         Toast.makeText(this, "请先授予设备管理权限，授予后才能熄屏。", Toast.LENGTH_LONG).show()
         ReminderLockHelper.requestDeviceAdmin(this)
     }
@@ -124,7 +143,13 @@ class ReminderAlertActivity : Activity() {
         if (isTest) { AlertCoordinator.dismissScreenAlert(this, sessionId); Toast.makeText(this, "测试提醒已关闭，不计入取消次数。", Toast.LENGTH_SHORT).show(); finish(); return }
         val config = ReminderPreferences.read(this)
         if (ScreenStateTracker.recordScreenAlertCancel(this, sessionId)) {
-            lockOrRequestAdmin()
+            pendingLockSessionId = sessionId
+            if (!ReminderLockHelper.isDeviceAdminActive(this)) {
+                Toast.makeText(this, "请先授予设备管理权限，授予后才能熄屏。", Toast.LENGTH_LONG).show()
+                ReminderLockHelper.requestDeviceAdmin(this)
+            } else {
+                finish()
+            }
             return
         }
         AlertCoordinator.dismissScreenAlert(this, sessionId)
@@ -138,7 +163,14 @@ class ReminderAlertActivity : Activity() {
         private const val EXTRA_TEXT = "text"
         private const val EXTRA_IS_TEST = "isTest"
         private const val EXTRA_SESSION_ID = "sessionId"
-        private var pendingLockAfterAdmin = false
+        private var pendingLockSessionId = ""
+        private const val ACTION_DISMISS = "com.randomwaterreminder.DISMISS_ALERT_ACTIVITY"
+
+        fun dismissIntent(context: Context, sessionId: String = ""): Intent = Intent(context, ReminderAlertActivity::class.java).apply {
+            action = ACTION_DISMISS
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
 
         fun intent(context: Context, type: ReminderType, title: String, text: String, isTest: Boolean = false, sessionId: String = ""): Intent = Intent(context, ReminderAlertActivity::class.java).apply {
             putExtra(EXTRA_TYPE, type.value)
@@ -146,7 +178,7 @@ class ReminderAlertActivity : Activity() {
             putExtra(EXTRA_TEXT, text)
             putExtra(EXTRA_IS_TEST, isTest)
             putExtra(EXTRA_SESSION_ID, sessionId)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_HISTORY
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
     }
 }

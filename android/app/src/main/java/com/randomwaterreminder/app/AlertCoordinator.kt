@@ -11,6 +11,7 @@ object AlertCoordinator {
     private fun dispatch(context: Context, type: ReminderType, title: String, text: String, config: ReminderConfig, isTest: Boolean, sessionId: String): AlertResult {
         val app = context.applicationContext
         val notes = mutableListOf<String>()
+        if (type == ReminderType.SCREEN_LIMIT && sessionId.isNotBlank()) ReminderLockHelper.startSession(app, sessionId)
         val notificationResult = NotificationHelper.showReminder(app, type, title, text, config)
         notes += "通知:${notificationResult.reason}"
         val overlayResult = if (Settings.canDrawOverlays(app)) {
@@ -32,7 +33,11 @@ object AlertCoordinator {
     }
 
     fun dismissScreenAlert(context: Context, sessionId: String = "") {
-        NotificationHelper.cancelScreenAlert(context); OverlayAlertService.dismiss(context.applicationContext, ReminderType.SCREEN_LIMIT); ReminderSoundPlayer.stop(context.applicationContext)
+        NotificationHelper.cancelScreenAlert(context)
+        OverlayAlertService.dismiss(context.applicationContext, ReminderType.SCREEN_LIMIT, sessionId)
+        ReminderSoundPlayer.stop(context.applicationContext)
+        NotificationHelper.cancelVibration(context.applicationContext)
+        runCatching { context.applicationContext.startActivity(ReminderAlertActivity.dismissIntent(context.applicationContext, sessionId)) }
     }
     fun dismissAlert(context: Context, type: ReminderType) { NotificationHelper.cancelAlert(context, type); OverlayAlertService.dismiss(context.applicationContext, type); ReminderSoundPlayer.stop(context.applicationContext) }
 }

@@ -37,7 +37,8 @@ class OverlayAlertService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISMISS) {
             val requestedType = ReminderType.from(intent.getStringExtra(EXTRA_TYPE))
-            if (requestedType == currentType) {
+            val requestedSession = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+            if (requestedType == currentType && (requestedSession.isBlank() || requestedSession == sessionId)) {
                 removeOverlay()
                 stopSelfSafely()
             }
@@ -169,7 +170,6 @@ class OverlayAlertService : Service() {
 
     private fun cancelScreenAlert(title: String, text: String) {
         if (isTest) { AlertCoordinator.dismissScreenAlert(this, sessionId); stopSelfSafely(); return }
-        val config = ReminderPreferences.read(this)
         if (ScreenStateTracker.recordScreenAlertCancel(this, sessionId)) {
             lockFromOverlay(title, text)
             return
@@ -267,10 +267,16 @@ class OverlayAlertService : Service() {
             }.getOrDefault(false)
         }
 
-        fun dismiss(context: Context, type: ReminderType) {
+        fun dismiss(context: Context, type: ReminderType, sessionId: String = "") {
             // stopService triggers onDestroy(), which always removes the current overlay.
             // Avoid starting a background service only to dismiss it.
-            runCatching { context.stopService(Intent(context, OverlayAlertService::class.java)) }
+            runCatching {
+                ContextCompat.startForegroundService(context.applicationContext, Intent(context, OverlayAlertService::class.java).apply {
+                    action = ACTION_DISMISS
+                    putExtra(EXTRA_TYPE, type.value)
+                    putExtra(EXTRA_SESSION_ID, sessionId)
+                })
+            }.onFailure { runCatching { context.stopService(Intent(context, OverlayAlertService::class.java)) } }
         }
     }
 }

@@ -24,7 +24,7 @@ class ScreenRestStateMachineTest {
     }
     @Test fun forceLockRestoredOnUnlock() {
         val decision = ScreenRestStateMachine.evaluate(snapshot(state = "on", now = 20 * minute, lastScreenOn = 19 * minute, forceLockActive = true, cancelCount = 3))
-        assertTrue(decision.forceLockActive); assertTrue(decision.shouldForceLock); assertTrue(decision.shouldAlert)
+        assertTrue(decision.forceLockActive); assertTrue(decision.shouldForceLock); assertFalse(decision.shouldAlert)
     }
     @Test fun screenOffTooShortKeepsRestRequired() {
         val decision = ScreenRestStateMachine.evaluate(snapshot(state = "off", now = 10 * minute, currentSince = 8 * minute, restStartedAt = 6 * minute, restRequired = true, requiredOff = 5))
@@ -40,3 +40,4 @@ class ScreenRestStateMachineTest {
     }
     private fun snapshot(state: String, now: Long, lastScreenOn: Long = 0L, lastScreenOff: Long = 0L, currentSince: Long = lastScreenOn, restRequired: Boolean = false, restStartedAt: Long = 0L, limit: Int = 5, requiredOff: Int = 5, cancelCount: Int = 0, cancelBeforeLockCount: Int = 3, forceLockActive: Boolean = false, nextAllowedAlertAt: Long = 0L) = ScreenRestSnapshot(state, now, lastScreenOn, lastScreenOff, currentSince, restRequired, restStartedAt, limit, requiredOff, cancelCount, cancelBeforeLockCount, forceLockActive, nextAllowedAlertAt)
 }
+
