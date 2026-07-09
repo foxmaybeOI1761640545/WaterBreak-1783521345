@@ -22,7 +22,7 @@ data class ScreenAlertSessionState(
         return ConsumeResult(
             state = copy(
                 activeSessionId = "",
-                handledSessionIds = (handledSessionIds + id).takeLast(MAX_HANDLED_SESSIONS).toSet(),
+                handledSessionIds = (handledSessionIds.toList() + id).takeLast(MAX_HANDLED_SESSIONS).toSet(),
                 cancelCount = nextCount,
                 forceLockActive = forceLockActive || shouldLock,
             ),

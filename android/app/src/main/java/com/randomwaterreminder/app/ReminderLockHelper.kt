@@ -19,7 +19,7 @@ object ReminderLockHelper {
 
     fun cancelCount(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_CANCEL_COUNT, 0)
     fun forceLockActive(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FORCE_LOCK_ACTIVE, false)
-    fun resetCancelCount(context: Context) { synchronized(lock) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_CANCEL_COUNT, 0).putBoolean(KEY_FORCE_LOCK_ACTIVE, false).putString(KEY_ACTIVE_SESSION_ID, "").putStringSet(KEY_HANDLED_SESSION_IDS, emptySet()).commit() } }
+    fun resetCancelCount(context: Context) { synchronized(lock) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_CANCEL_COUNT, 0).putBoolean(KEY_FORCE_LOCK_ACTIVE, false).putString(KEY_ACTIVE_SESSION_ID, "").putStringSet(KEY_HANDLED_SESSION_IDS, emptySet<String>()).commit() } }
 
     fun startSession(context: Context, sessionId: String) {
         if (sessionId.isBlank()) return
@@ -36,7 +36,7 @@ object ReminderLockHelper {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val state = ScreenAlertSessionState(
             activeSessionId = p.getString(KEY_ACTIVE_SESSION_ID, "").orEmpty(),
-            handledSessionIds = p.getStringSet(KEY_HANDLED_SESSION_IDS, emptySet()).orEmpty(),
+            handledSessionIds = p.getStringSet(KEY_HANDLED_SESSION_IDS, emptySet<String>()).orEmpty(),
             cancelCount = p.getInt(KEY_CANCEL_COUNT, 0),
             forceLockActive = p.getBoolean(KEY_FORCE_LOCK_ACTIVE, false),
         )
@@ -44,7 +44,7 @@ object ReminderLockHelper {
         if (result.accepted) {
             p.edit()
                 .putString(KEY_ACTIVE_SESSION_ID, result.state.activeSessionId)
-                .putStringSet(KEY_HANDLED_SESSION_IDS, result.state.handledSessionIds)
+                .putStringSet(KEY_HANDLED_SESSION_IDS, result.state.handledSessionIds.toMutableSet())
                 .putInt(KEY_CANCEL_COUNT, result.state.cancelCount)
                 .putBoolean(KEY_FORCE_LOCK_ACTIVE, result.state.forceLockActive)
                 .commit()
