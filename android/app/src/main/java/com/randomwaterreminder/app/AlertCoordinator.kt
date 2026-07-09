@@ -11,8 +11,10 @@ object AlertCoordinator {
     private fun dispatch(context: Context, type: ReminderType, title: String, text: String, config: ReminderConfig, isTest: Boolean, sessionId: String): AlertResult {
         val app = context.applicationContext
         val notes = mutableListOf<String>()
-        if (type == ReminderType.SCREEN_LIMIT && sessionId.isNotBlank()) ReminderLockHelper.startSession(app, sessionId)
-        val notificationResult = NotificationHelper.showReminder(app, type, title, text, config)
+        if (!isTest && type == ReminderType.SCREEN_LIMIT && sessionId.isNotBlank() && !ReminderLockHelper.startSession(app, sessionId)) {
+            return AlertResult(reason = "已有未处理的屏幕提醒会话，忽略重复创建")
+        }
+        val notificationResult = NotificationHelper.showReminder(app, type, title, text, config, sessionId)
         notes += "通知:${notificationResult.reason}"
         val overlayResult = if (Settings.canDrawOverlays(app)) {
             if (OverlayAlertService.start(app, type, title, text, null, isTest, sessionId)) ChannelResult(true, "已请求悬浮窗") else ChannelResult(false, "悬浮窗服务启动失败")

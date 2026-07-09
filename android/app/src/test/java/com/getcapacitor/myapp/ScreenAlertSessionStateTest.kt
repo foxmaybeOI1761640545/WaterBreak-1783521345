@@ -4,6 +4,8 @@ import com.randomwaterreminder.app.RapidScreenOnGraceState
 import com.randomwaterreminder.app.ScreenAlertSessionState
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.Collections
+import kotlin.concurrent.thread
 
 class ScreenAlertSessionStateTest {
     @Test fun sameSessionOverlayAndActivityCancelOnlyCountsOnce() {
@@ -38,6 +40,43 @@ class ScreenAlertSessionStateTest {
         assertTrue(lock.state.forceLockActive)
         assertFalse(duplicate.shouldForceLock)
         assertEquals(3, duplicate.state.cancelCount)
+    }
+
+
+    @Test fun sameSessionCancelledThreeTimesOnlyCountsOnce() {
+        var state = ScreenAlertSessionState().start("s-repeat")
+        repeat(3) { state = state.consume("s-repeat", 5).state }
+        assertEquals(1, state.cancelCount)
+    }
+
+    @Test fun concurrentCancelsOfSameSessionOnlyCountOnce() {
+        val monitor = Any()
+        var state = ScreenAlertSessionState().start("s-concurrent")
+        val accepted = Collections.synchronizedList(mutableListOf<Boolean>())
+        val workers = (1..2).map {
+            thread {
+                val result = synchronized(monitor) {
+                    val r = state.consume("s-concurrent", 5)
+                    state = r.state
+                    r
+                }
+                accepted += result.accepted
+            }
+        }
+        workers.forEach { it.join() }
+        assertEquals(1, state.cancelCount)
+        assertEquals(1, accepted.count { it })
+    }
+
+    @Test fun lateOldSessionDoesNotConsumeNewActiveSession() {
+        val afterOld = ScreenAlertSessionState().start("old").consume("old", 5).state
+        val newActive = afterOld.start("new")
+        val oldLate = newActive.consume("old", 5)
+        assertFalse(oldLate.accepted)
+        assertEquals("new", oldLate.state.activeSessionId)
+        val newCancel = oldLate.state.consume("new", 5)
+        assertTrue(newCancel.accepted)
+        assertEquals(2, newCancel.state.cancelCount)
     }
 
     @Test fun rapidThreeRealOffToOnEventsEnterGraceButOneOrTwoDoNot() {

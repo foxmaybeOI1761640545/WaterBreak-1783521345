@@ -2,6 +2,7 @@ package com.randomwaterreminder.app
 
 import android.Manifest
 import android.app.admin.DevicePolicyManager
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -208,25 +209,20 @@ class WaterReminderPlugin : Plugin() {
         call.resolve(ScreenStateTracker.status(context))
     }
 
+
     @PluginMethod
     fun openExactAlarmSettings(call: PluginCall) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            call.resolve(JSObject().put("opened", false))
+            call.resolve(settingsResult(false, "exact_alarm", reason = "当前 Android 版本无需单独设置精确闹钟"))
             return
         }
-        runCatching { context.startActivity(WaterReminderScheduler.exactAlarmSettingsIntent(context)) }
-            .onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { call.reject(it.message ?: "无法打开精确闹钟设置") }
+        openSettingsIntent(call, WaterReminderScheduler.exactAlarmSettingsIntent(context), "exact_alarm", fallback = appDetailsIntent())
     }
 
     @PluginMethod
     fun openNotificationSettings(call: PluginCall) {
         val type = ReminderType.from(call.getString("type", ReminderType.WATER.value))
-        val channelId = if (type == ReminderType.WATER) {
-            NotificationHelper.WATER_CHANNEL_ID
-        } else {
-            NotificationHelper.SCREEN_CHANNEL_ID
-        }
+        val channelId = if (type == ReminderType.WATER) NotificationHelper.WATER_CHANNEL_ID else NotificationHelper.SCREEN_CHANNEL_ID
         val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -237,98 +233,121 @@ class WaterReminderPlugin : Plugin() {
                 putExtra("app_package", context.packageName)
                 putExtra("app_uid", context.applicationInfo.uid)
             }
-        }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
-            .onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { call.reject(it.message ?: "无法打开通知设置") }
+        }
+        openSettingsIntent(call, intent, "notification_${type.value}", fallback = appDetailsIntent())
     }
 
     @PluginMethod
     fun openOverlaySettings(call: PluginCall) {
-        runCatching {
-            context.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:${context.packageName}"),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }.onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { call.reject(it.message ?: "无法打开悬浮窗设置") }
+        openSettingsIntent(
+            call,
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")),
+            "overlay",
+            fallback = appDetailsIntent(),
+        )
     }
 
     @PluginMethod
     fun openUsageAccessSettings(call: PluginCall) {
-        runCatching {
-            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }.onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { call.reject(it.message ?: "无法打开使用情况访问设置") }
+        openSettingsIntent(call, Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS), "usage_access", fallback = appDetailsIntent())
     }
 
     @PluginMethod
     fun openFullScreenIntentSettings(call: PluginCall) {
         if (Build.VERSION.SDK_INT < 34) {
-            call.resolve(JSObject().put("opened", false))
+            call.resolve(settingsResult(false, "full_screen_intent", reason = "当前 Android 版本无需单独设置全屏提醒"))
             return
         }
-        runCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-        }.onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { call.reject(it.message ?: "无法打开全屏提醒设置") }
+        openSettingsIntent(
+            call,
+            Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply { data = Uri.parse("package:${context.packageName}") },
+            "full_screen_intent",
+            fallback = appDetailsIntent(),
+        )
     }
-
-
 
     @PluginMethod
     fun openDeviceAdminSettings(call: PluginCall) {
-        runCatching {
-            context.startActivity(
-                Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(context, ReminderDeviceAdminReceiver::class.java))
-                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于连续取消屏幕提醒后执行系统锁屏。")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-        }.onSuccess { call.resolve(JSObject().put("opened", true)) }
-            .onFailure { openAppDetails(call, it.message ?: "无法打开设备管理器设置") }
+        val addAdmin = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(context, ReminderDeviceAdminReceiver::class.java))
+            putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "用于连续取消屏幕提醒后执行系统锁屏。")
+        }
+        val fallback = Intent(Settings.ACTION_SECURITY_SETTINGS)
+        openSettingsIntent(call, addAdmin, "device_admin", fallback = fallback, fallbackTarget = "device_security")
     }
 
     @PluginMethod
     fun openAppDetailsSettings(call: PluginCall) {
-        openAppDetails(call, "无法打开应用详情设置")
+        openSettingsIntent(call, appDetailsIntent(), "app_details")
+    }
+
+    @PluginMethod
+    fun openBatteryOptimizationSettings(call: PluginCall) {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        } else {
+            appDetailsIntent()
+        }
+        openSettingsIntent(call, intent, "battery_optimization", fallback = appDetailsIntent())
     }
 
     @PluginMethod
     fun openManufacturerPermissionSettings(call: PluginCall) {
-        val intents = listOf(
-            Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+        if (!isXiaomiLikeDevice()) {
+            call.resolve(settingsResult(false, "manufacturer", reason = "当前设备不是 MIUI/HyperOS，未显示小米专用入口"))
+            return
+        }
+        val target = call.getString("target", "permissions") ?: "permissions"
+        val intent = when (target) {
+            "autostart" -> Intent("miui.intent.action.OP_AUTO_START").apply {
+                setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+            }
+            else -> Intent("miui.intent.action.APP_PERM_EDITOR").apply {
                 setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
                 putExtra("extra_pkgname", context.packageName)
-            },
-            Intent("miui.intent.action.OP_AUTO_START").apply {
-                setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
-            },
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") },
-        ).map { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-        val opened = intents.any { intent -> runCatching { context.startActivity(intent) }.isSuccess }
-        if (opened) call.resolve(JSObject().put("opened", true)) else openAppDetails(call, "无法打开厂商权限设置")
+            }
+        }
+        openSettingsIntent(call, intent, "miui_$target")
     }
 
-    private fun openAppDetails(call: PluginCall, fallbackMessage: String) {
-        runCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-        }.onSuccess { call.resolve(JSObject().put("opened", true).put("fallback", true)) }
-            .onFailure { call.reject(fallbackMessage) }
+    private fun openSettingsIntent(
+        call: PluginCall,
+        intent: Intent,
+        target: String,
+        fallback: Intent? = null,
+        fallbackTarget: String = "app_details",
+    ) {
+        val primary = intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val packageManager = context.packageManager
+        val primaryResolved = primary.resolveActivity(packageManager) != null
+        val finalIntent: Intent
+        val finalTarget: String
+        val usedFallback: Boolean
+        when {
+            primaryResolved -> { finalIntent = primary; finalTarget = target; usedFallback = false }
+            fallback != null && fallback.resolveActivity(packageManager) != null -> { finalIntent = fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); finalTarget = fallbackTarget; usedFallback = true }
+            else -> {
+                call.resolve(settingsResult(false, target, reason = "系统没有可打开的设置页面，请手动进入系统设置"))
+                return
+            }
+        }
+        runCatching { (activity ?: context).startActivity(finalIntent) }
+            .onSuccess { call.resolve(settingsResult(true, finalTarget, usedFallback)) }
+            .onFailure { error ->
+                if (error is ActivityNotFoundException) call.resolve(settingsResult(false, finalTarget, usedFallback, "系统没有可打开的设置页面"))
+                else call.resolve(settingsResult(false, finalTarget, usedFallback, error.message ?: "无法打开系统设置"))
+            }
     }
+
+    private fun settingsResult(opened: Boolean, target: String, fallback: Boolean = false, reason: String? = null): JSObject = JSObject().apply {
+        put("opened", opened)
+        put("target", target)
+        put("fallback", fallback)
+        if (!reason.isNullOrBlank()) put("reason", reason)
+    }
+
+    private fun appDetailsIntent(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") }
+    private fun isXiaomiLikeDevice(): Boolean = listOf(Build.MANUFACTURER, Build.BRAND).any { it.contains("xiaomi", ignoreCase = true) || it.contains("redmi", ignoreCase = true) || it.contains("poco", ignoreCase = true) }
 
     @PluginMethod
     fun requestNotificationPermission(call: PluginCall) {
@@ -377,7 +396,7 @@ class WaterReminderPlugin : Plugin() {
             put("screenChannelImportance", screenChannel.second)
             put("deviceAdmin", deviceAdmin)
             put("batteryOptimization", batteryOptimization)
-            put("manufacturerSettingsAvailable", true)
+            put("manufacturerSettingsAvailable", isXiaomiLikeDevice())
         }
     }
 

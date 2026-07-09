@@ -72,6 +72,7 @@ object NotificationHelper {
         title: String,
         text: String,
         config: ReminderConfig = ReminderPreferences.read(context),
+        sessionId: String = "",
     ): AlertResult {
         ensureChannels(context, config)
         if (!hasNotificationPermission(context)) {
@@ -84,7 +85,7 @@ object NotificationHelper {
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val requestFullScreen = !powerManager.isInteractive && canUseFullScreenIntent(context)
-        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen)
+        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen, sessionId)
         return runCatching {
             NotificationManagerCompat.from(context).notify(notificationId(type), notification)
             AlertResult(
@@ -110,11 +111,12 @@ object NotificationHelper {
         text: String,
         config: ReminderConfig,
         fullScreen: Boolean,
+        sessionId: String = "",
     ): Notification {
         val pendingIntent = PendingIntent.getActivity(
             context,
             requestCode(type),
-            ReminderAlertActivity.intent(context, type, title, text, sessionId = if (type == ReminderType.SCREEN_LIMIT) ReminderLockHelper.activeSessionId(context) else ""),
+            ReminderAlertActivity.intent(context, type, title, text, sessionId = sessionId),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(context, channelId(type))

@@ -21,12 +21,25 @@ object ReminderLockHelper {
     fun forceLockActive(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FORCE_LOCK_ACTIVE, false)
     fun resetCancelCount(context: Context) { synchronized(lock) { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_CANCEL_COUNT, 0).putBoolean(KEY_FORCE_LOCK_ACTIVE, false).putString(KEY_ACTIVE_SESSION_ID, "").putStringSet(KEY_HANDLED_SESSION_IDS, emptySet<String>()).commit() } }
 
-    fun startSession(context: Context, sessionId: String) {
-        if (sessionId.isBlank()) return
-        synchronized(lock) {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+    fun startSession(context: Context, sessionId: String): Boolean {
+        if (sessionId.isBlank()) return false
+        return synchronized(lock) {
+            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val active = p.getString(KEY_ACTIVE_SESSION_ID, "").orEmpty()
+            if (active.isNotBlank() && active != sessionId) return@synchronized false
+            val handled = p.getStringSet(KEY_HANDLED_SESSION_IDS, emptySet<String>()).orEmpty().toMutableSet().apply { remove(sessionId) }
+            p.edit()
                 .putString(KEY_ACTIVE_SESSION_ID, sessionId)
+                .putStringSet(KEY_HANDLED_SESSION_IDS, handled)
                 .commit()
+        }
+    }
+
+    fun invalidateActiveSession(context: Context, sessionId: String = "") {
+        synchronized(lock) {
+            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val active = p.getString(KEY_ACTIVE_SESSION_ID, "").orEmpty()
+            if (sessionId.isBlank() || sessionId == active) p.edit().putString(KEY_ACTIVE_SESSION_ID, "").commit()
         }
     }
 

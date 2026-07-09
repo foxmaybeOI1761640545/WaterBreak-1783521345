@@ -211,11 +211,10 @@ object ScreenStateTracker {
             AlertCoordinator.dismissScreenAlert(appContext)
         }
 
-        if (decision.shouldAlert) {
+        if (decision.shouldAlert && ReminderLockHelper.activeSessionId(appContext).isBlank()) {
             val title = "亮屏时间过长"
             val text = "已经连续亮屏 ${config.screenOnLimitMinutes} 分钟以上，请连续息屏 ${config.requiredScreenOffMinutes} 分钟休息。"
             val sessionId = "screen-${now}"
-            prefs.edit().putString(KEY_ACTIVE_SESSION_ID, sessionId).apply()
             AlertCoordinator.alert(appContext, ReminderType.SCREEN_LIMIT, title, text, config, sessionId = sessionId)
         }
 

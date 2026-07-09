@@ -130,3 +130,24 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .guide-current span { color:#557083; }
 .guide-current div { display:flex; flex-wrap:wrap; gap:8px; }
 @media (max-width: 640px) { .permission-guide .guide-header, .permission-row { align-items:stretch; flex-direction:column; } .permission-row em { align-self:flex-start; } }
+.permission-entry { min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px; }
+.permission-entry div { display:flex; flex-direction:column; gap:4px; }
+.permission-entry span, .guide-progress span { color:#557083; font-size:.9rem; }
+.permission-entry button { flex:0 0 auto; }
+.permission-guide-page h3 { margin:18px 0 10px; }
+.guide-progress { display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:14px; background:#f4fbfe; }
+.compact-list { gap:8px; }
+.permission-row { width:100%; color:#17324d; border:1px solid transparent; box-shadow:none; text-align:left; }
+.permission-row.selected { border-color:#14b8a6; background:#ecfdf5; }
+.permission-row.optional-row { background:#fbfeff; }
+.permission-row em.optional { color:#64748b; }
+.permission-row details { color:#6a8292; font-size:.85rem; margin-top:4px; }
+@media (max-width: 640px) {
+  .permission-entry { min-height:70px; padding:10px 12px; border-radius:16px; }
+  .permission-entry button { padding:10px 12px; }
+  .permission-guide .guide-header, .permission-guide-page .guide-header { flex-direction:row; align-items:flex-start; }
+  .permission-row { flex-direction:row; align-items:center; padding:9px 10px; }
+  .permission-row small { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .permission-row em { align-self:center; font-size:.85rem; }
+  .guide-current div { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); }
+}

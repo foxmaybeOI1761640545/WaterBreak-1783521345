@@ -163,7 +163,7 @@ class OverlayAlertService : Service() {
             return
         }
         Toast.makeText(this, "请在弹出的页面中授予设备管理权限。", Toast.LENGTH_LONG).show()
-        runCatching { startActivity(ReminderAlertActivity.intent(this, ReminderType.SCREEN_LIMIT, title, text)) }
+        runCatching { startActivity(ReminderAlertActivity.intent(this, ReminderType.SCREEN_LIMIT, title, text, sessionId = sessionId)) }
         removeOverlay()
         stopSelfSafely()
     }
