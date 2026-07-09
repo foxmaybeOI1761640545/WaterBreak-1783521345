@@ -28,6 +28,10 @@ export interface ReminderConfig {
   screenCustomSoundUri?: string
   screenCustomSoundName?: string
   screenVolumePercent: number
+  screenCyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  screenCycleLimit?: number
+  screenCycleActiveSessionId?: string
+  screenCycleSessionStartedAt?: number
   waterAlarmScheduled?: boolean
   waterAlarmExact?: boolean
   waterAlarmReason?: string
@@ -70,6 +74,11 @@ export interface ScreenStateStatus {
   restStartedAt?: number
   nextScreenCheckAt?: number
   trackingReliable?: boolean
+  cycleCancelCount?: number
+  cycleLimit?: number
+  cyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  cycleActiveSessionId?: string
+  cycleSessionStartedAt?: number
   trackingNote: string
 }
 

@@ -39,6 +39,7 @@ object AlertCoordinator {
         OverlayAlertService.dismiss(context.applicationContext, ReminderType.SCREEN_LIMIT, sessionId)
         ReminderSoundPlayer.stop(context.applicationContext)
         NotificationHelper.cancelVibration(context.applicationContext)
+        ReminderLockHelper.invalidateActiveSession(context.applicationContext, sessionId)
         runCatching { context.applicationContext.startActivity(ReminderAlertActivity.dismissIntent(context.applicationContext, sessionId)) }
     }
     fun dismissAlert(context: Context, type: ReminderType) { NotificationHelper.cancelAlert(context, type); OverlayAlertService.dismiss(context.applicationContext, type); ReminderSoundPlayer.stop(context.applicationContext) }

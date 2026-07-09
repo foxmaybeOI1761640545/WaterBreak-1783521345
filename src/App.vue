@@ -93,10 +93,15 @@ const currentScreenDurationText = computed(() => {
 })
 const lastScreenOnText = computed(() => formatTimestamp(state.screenState?.lastScreenOnTime || 0))
 const lastScreenOffText = computed(() => formatTimestamp(state.screenState?.lastScreenOffTime || 0))
+const screenCyclePhase = computed(() => state.screenState?.cyclePhase ?? state.status.screenCyclePhase ?? 'idle')
+const screenCycleCount = computed(() => state.screenState?.cycleCancelCount ?? state.status.cancelCycleCount ?? 0)
+const screenCycleLimit = computed(() => state.screenState?.cycleLimit ?? state.status.screenCycleLimit ?? state.status.cancelBeforeLockCount ?? 1)
 const cancelCycleText = computed(() => {
-  const total = state.status.cancelBeforeLockCount ?? 1
-  const current = Math.min((state.status.cancelCycleCount ?? 0), total)
-  return current > 0 ? `已取消 ${current} / ${total} 次` : '未进入提醒循环'
+  if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
+  if (screenCyclePhase.value === 'alerting') return '提醒中'
+  if (screenCyclePhase.value === 'force_lock') return `强制熄屏中 ${screenCycleCount.value}/${screenCycleLimit.value}`
+  if (screenCyclePhase.value === 'grace') return '紧急宽限中'
+  return screenCycleCount.value > 0 ? `已取消 ${screenCycleCount.value} / ${screenCycleLimit.value} 次` : '等待息屏休息'
 })
 const isSettingsPage = computed(() => state.activePage === 'waterSettings' || state.activePage === 'screenSettings')
 const isPermissionGuidePage = computed(() => state.activePage === 'permissionGuide')
@@ -105,6 +110,7 @@ let ticker: number | undefined
 let screenRefreshTicker: number | undefined
 let backButtonHandle: PluginListenerHandle | undefined
 let appStateHandle: PluginListenerHandle | undefined
+let messageTimer: number | undefined
 const contentScroller = ref<HTMLElement | null>(null)
 const touchStart = reactive({ x: 0, y: 0, active: false })
 
@@ -254,15 +260,21 @@ function parseNextReminderInput() { const parsed = state.nextReminderInput ? new
 function toDateTimeLocalValue(timestamp: number) { const date = new Date(timestamp); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) }
 
 async function refreshScreenStateOnly() { try { state.screenState = await WaterReminder.getScreenState() } catch { /* keep current UI */ } }
-async function refreshStatus() {
+function setUserMessage(message: string, durationMs = state.activePage === 'screen' ? 2200 : 0) {
+  state.message = message
+  if (messageTimer) window.clearTimeout(messageTimer)
+  if (durationMs > 0) messageTimer = window.setTimeout(() => { if (state.message === message) state.message = '' }, durationMs)
+}
+
+async function refreshStatus(showMessage = false) {
   state.loading = true
   try {
     state.status = { ...defaultStatus, ...await WaterReminder.getStatus() }
     state.permissions = await WaterReminder.getPermissionStatus()
     state.screenState = await WaterReminder.getScreenState()
     updateNextReminderInput()
-    state.message = '状态已更新'
-  } catch (error) { state.message = error instanceof Error ? error.message : '读取状态失败' } finally { state.loading = false }
+    if (showMessage) setUserMessage('状态已更新')
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : '读取状态失败', 4000) } finally { state.loading = false }
 }
 async function saveConfig(message: string, overrides: Partial<ReminderConfig> = {}) {
   state.saving = true
@@ -272,16 +284,16 @@ async function saveConfig(message: string, overrides: Partial<ReminderConfig> = 
     state.permissions = await WaterReminder.requestNotificationPermission()
     state.status = { ...defaultStatus, ...await WaterReminder.startReminder(config) }
     updateNextReminderInput()
-    state.message = message
-  } catch (error) { state.message = error instanceof Error ? error.message : message.includes('开启') ? '开启提醒失败' : '保存提醒设置失败' } finally { state.saving = false }
+    setUserMessage(message)
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : message.includes('开启') ? '开启提醒失败' : '保存提醒设置失败', 4000) } finally { state.saving = false }
 }
 function saveWaterSettings() { return saveConfig('喝水提醒设置已保存') }
 function saveScreenSettings() { return saveConfig('屏幕记录设置已保存') }
 function enableReminder() { return saveConfig('喝水提醒已开启，可划掉应用后等待闹钟触发', { enabled: true }) }
 async function disableReminder() {
   state.saving = true
-  try { state.status = { ...defaultStatus, ...await WaterReminder.stopReminder() }; state.message = '喝水提醒已关闭' }
-  catch (error) { state.message = error instanceof Error ? error.message : '关闭提醒失败' }
+  try { state.status = { ...defaultStatus, ...await WaterReminder.stopReminder() }; setUserMessage('喝水提醒已关闭') }
+  catch (error) { setUserMessage(error instanceof Error ? error.message : '关闭提醒失败', 4000) }
   finally { state.saving = false }
 }
 function enableScreenLimit() { return saveConfig('屏幕超时提醒已开启', { screenLimitEnabled: true }) }
@@ -380,13 +392,13 @@ async function reviewPermissionReturn(source: 'native' | 'web' | 'manual') {
 }
 async function openPermissionSettings(kind: Exclude<PermissionGuideKey, 'notifications'>) {
   const result = await launchPermissionIntent(kind)
-  state.message = result.opened ? '已打开对应系统设置，授权后请返回应用刷新状态' : (result.reason || '无法打开系统设置')
+  setUserMessage(result.opened ? '已打开对应系统设置，授权后请返回应用刷新状态' : (result.reason || '无法打开系统设置'), result.opened ? 2200 : 4000)
 }
 
 async function testNotification(type: ReminderType) {
   state.saving = true
-  try { state.permissions = await WaterReminder.requestNotificationPermission(); const result = await WaterReminder.showTestNotification({ type }); state.message = result.ok ? `${type === 'water' ? '喝水' : '屏幕'}测试结果：通知 ${result.notification?.ok ? '成功' : '失败'}，悬浮 ${result.overlay?.ok ? '成功' : '失败'}，居中 ${result.centerDialog?.ok ? '成功' : '失败'}，声音 ${result.sound?.ok ? '成功' : '失败'}，振动 ${result.vibration?.ok ? '成功' : '失败'}` : `测试失败：${result.reason || '权限不足或渠道关闭'}` }
-  catch (error) { state.message = error instanceof Error ? error.message : '测试通知失败' }
+  try { state.permissions = await WaterReminder.requestNotificationPermission(); const result = await WaterReminder.showTestNotification({ type }); setUserMessage(result.ok ? `${type === 'water' ? '喝水' : '屏幕'}测试结果：通知 ${result.notification?.ok ? '成功' : '失败'}，悬浮 ${result.overlay?.ok ? '成功' : '失败'}，居中 ${result.centerDialog?.ok ? '成功' : '失败'}，声音 ${result.sound?.ok ? '成功' : '失败'}，振动 ${result.vibration?.ok ? '成功' : '失败'}` : `测试失败：${result.reason || '权限不足或渠道关闭'}`) }
+  catch (error) { setUserMessage(error instanceof Error ? error.message : '测试通知失败', 4000) }
   finally { state.saving = false }
 }
 async function setSoundMode(type: ReminderType, mode: ReminderSoundMode) {
@@ -433,6 +445,7 @@ onUnmounted(() => {
   window.removeEventListener('popstate', handlePopState)
   backButtonHandle?.remove()
   appStateHandle?.remove()
+  if (messageTimer) window.clearTimeout(messageTimer)
 })
 </script>
 
@@ -448,7 +461,7 @@ onUnmounted(() => {
     </header>
 
     <main ref="contentScroller" class="app-content" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
-      <section v-if="!isSettingsPage && !isPermissionGuidePage" class="card permission-entry">
+      <section v-if="state.activePage === 'water'" class="card permission-entry">
         <div><strong>权限配置</strong><span>{{ permissionSummaryText }}</span></div>
         <button :disabled="state.loading || state.saving" @click="startPermissionGuide">配置权限</button>
       </section>
@@ -467,31 +480,30 @@ onUnmounted(() => {
           <button :disabled="state.loading || state.saving" @click="enableReminder">开启提醒</button>
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableReminder">关闭提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button>
-          <button class="ghost" :disabled="state.loading || state.saving" @click="refreshStatus">刷新状态</button>
+          <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshStatus(true)">刷新状态</button>
         </section>
       </template>
 
       <template v-else-if="state.activePage === 'screen'">
-        <section class="card screen-card">
-          <h2>亮屏/息屏记录</h2>
-          <div class="status-pill" :class="{ enabled: state.status.screenLimitEnabled }">{{ screenLimitText }}</div>
+        <section class="card screen-card compact-screen-card">
+          <div class="screen-card-title"><h2>亮屏/息屏记录</h2><div><button class="ghost mini-button" @click="startPermissionGuide">权限</button><span class="status-pill" :class="{ enabled: state.status.screenLimitEnabled }">{{ screenLimitText }}</span></div></div>
           <div class="summary-grid compact">
             <div><span>当前屏幕状态</span><strong>{{ currentScreenStateText }}</strong></div>
             <div><span>当前状态持续</span><strong>{{ currentScreenDurationText }}</strong></div>
             <div><span>上一次亮屏时间</span><strong>{{ lastScreenOnText }}</strong></div>
             <div><span>上一次息屏时间</span><strong>{{ lastScreenOffText }}</strong></div>
             <div><span>亮屏超时阈值</span><strong>{{ state.status.screenOnLimitMinutes ? `${state.status.screenOnLimitMinutes} 分钟` : '未设置' }}</strong></div>
+            <div><span>息屏时长阈值</span><strong>{{ state.status.requiredScreenOffMinutes }} 分钟</strong></div>
             <div><span>当前循环</span><strong>{{ cancelCycleText }}</strong></div>
             <div><span>屏幕铃声</span><strong>{{ screenSoundModeText }}</strong></div>
           </div>
-          <p class="sound-note">状态：后台由闹钟核对亮灭屏；未授权时可能延迟。</p>
-          <details class="sound-note"><summary>查看记录说明</summary>{{ state.screenState?.trackingNote || '打开应用后开始记录屏幕亮灭状态。' }}</details>
+          <details class="sound-note compact-note"><summary>ⓘ 记录说明</summary>{{ state.screenState?.trackingNote || '打开应用后开始记录屏幕亮灭状态。' }}</details>
         </section>
         <section class="actions">
           <button :disabled="state.loading || state.saving" @click="enableScreenLimit">开启屏幕提醒</button>
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableScreenLimit">关闭屏幕提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button>
-          <button class="ghost" :disabled="state.loading || state.saving" @click="refreshStatus">刷新屏幕记录</button>
+          <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshStatus(true)">刷新屏幕记录</button>
         </section>
       </template>
 
@@ -566,8 +578,9 @@ onUnmounted(() => {
         <section class="actions"><button :disabled="state.loading || state.saving" @click="saveScreenSettings">保存设置</button><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button><button class="ghost" @click="openPermissionSettings('usage')">使用情况权限</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('screenNotification')">屏幕通知设置</button></section>
       </template>
 
-      <p v-if="state.message" class="message">{{ state.message }}</p>
-      <p class="hint">如使用 MIUI/HyperOS，请允许通知、悬浮通知、自启动、熄屏/锁屏与不限制省电，以提升提醒稳定性。</p>
+      <p v-if="state.message && state.activePage !== 'screen'" class="message">{{ state.message }}</p>
+      <p v-if="state.activePage !== 'screen'" class="hint">如使用 MIUI/HyperOS，请允许通知、悬浮通知、自启动、熄屏/锁屏与不限制省电，以提升提醒稳定性。</p>
+      <p v-if="state.message && state.activePage === 'screen'" class="snackbar">{{ state.message }}</p>
     </main>
 
     <nav v-if="!isSettingsPage && !isPermissionGuidePage" class="bottom-tabs" aria-label="主功能切换">

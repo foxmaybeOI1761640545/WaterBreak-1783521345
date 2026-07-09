@@ -87,9 +87,7 @@ class WaterReminderPlugin : Plugin() {
         val screenConfigChanged = current.screenLimitEnabled != config.screenLimitEnabled ||
             current.screenOnLimitMinutes != config.screenOnLimitMinutes ||
             current.requiredScreenOffMinutes != config.requiredScreenOffMinutes ||
-            current.cancelBeforeLockCount != config.cancelBeforeLockCount ||
-            current.waterVolumePercent != config.waterVolumePercent ||
-            current.screenVolumePercent != config.screenVolumePercent
+            current.cancelBeforeLockCount != config.cancelBeforeLockCount
 
         ReminderPreferences.save(context, config)
         NotificationHelper.ensureChannels(context, config)
@@ -436,7 +434,12 @@ class WaterReminderPlugin : Plugin() {
             put("screenOnLimitMinutes", screenOnLimitMinutes)
             put("requiredScreenOffMinutes", requiredScreenOffMinutes)
             put("cancelBeforeLockCount", cancelBeforeLockCount)
-            put("cancelCycleCount", ReminderLockHelper.cancelCount(context))
+            val cycle = ScreenStateTracker.cycleSnapshot(context)
+            put("cancelCycleCount", cycle.cancelCount)
+            put("screenCyclePhase", cycle.phase)
+            put("screenCycleLimit", cycle.limit)
+            put("screenCycleActiveSessionId", cycle.activeSessionId)
+            put("screenCycleSessionStartedAt", cycle.sessionStartedAt)
             put("screenSoundMode", screenSoundMode)
             put("screenCustomSoundUri", screenCustomSoundUri)
             put("screenCustomSoundName", screenCustomSoundName)

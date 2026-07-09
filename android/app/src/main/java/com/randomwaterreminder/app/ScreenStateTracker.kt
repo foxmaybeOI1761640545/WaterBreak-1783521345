@@ -19,7 +19,6 @@ object ScreenStateTracker {
     internal const val KEY_REST_STARTED_AT = "restStartedAt"
     const val KEY_NEXT_SCREEN_CHECK_AT = "nextScreenCheckAt"
     private const val KEY_NEXT_ALLOWED_ALERT_AT = "nextAllowedAlertAt"
-    private const val KEY_ACTIVE_SESSION_ID = "activeSessionId"
     private const val KEY_LAST_OBSERVED_AT = "lastObservedAt"
     private const val KEY_GRACE_UNTIL = "emergencyGraceUntil"
     private const val KEY_RAPID_ON_TIMES = "rapidScreenOnTimes"
@@ -60,13 +59,15 @@ object ScreenStateTracker {
 
     fun status(context: Context): JSObject {
         start(context)
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val appContext = context.applicationContext
+        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val state = prefs.getString(KEY_CURRENT_STATE, "unknown") ?: "unknown"
         val stateSince = prefs.getLong(KEY_STATE_SINCE, 0L)
         val lastScreenOn = prefs.getLong(KEY_LAST_SCREEN_ON, 0L)
         val lastScreenOff = prefs.getLong(KEY_LAST_SCREEN_OFF, 0L)
         val now = System.currentTimeMillis()
         val usagePermission = ScreenUsageEventReader.hasPermission(context)
+        val cycle = cycleSnapshot(appContext, ReminderPreferences.read(appContext), prefs, now)
         return JSObject().apply {
             put("currentScreenState", state)
             put("currentScreenStateSince", stateSince)
@@ -76,6 +77,11 @@ object ScreenStateTracker {
             put("restRequired", prefs.getBoolean(KEY_REST_REQUIRED, false))
             put("restStartedAt", prefs.getLong(KEY_REST_STARTED_AT, 0L))
             put("nextScreenCheckAt", prefs.getLong(KEY_NEXT_SCREEN_CHECK_AT, 0L))
+            put("cycleCancelCount", cycle.cancelCount)
+            put("cycleLimit", cycle.limit)
+            put("cyclePhase", cycle.phase)
+            put("cycleActiveSessionId", cycle.activeSessionId)
+            put("cycleSessionStartedAt", cycle.sessionStartedAt)
             put("trackingReliable", usagePermission)
             put(
                 "trackingNote",
@@ -181,6 +187,7 @@ object ScreenStateTracker {
             return false
         }
 
+        val cycleBeforeDecision = cycleSnapshot(appContext, config, prefs, now)
         val decision = ScreenRestStateMachine.evaluate(
             ScreenRestSnapshot(
                 state = prefs.getString(KEY_CURRENT_STATE, "unknown") ?: "unknown",
@@ -192,9 +199,9 @@ object ScreenStateTracker {
                 restStartedAt = prefs.getLong(KEY_REST_STARTED_AT, 0L),
                 screenOnLimitMinutes = config.screenOnLimitMinutes,
                 requiredScreenOffMinutes = config.requiredScreenOffMinutes,
-                cancelCount = ReminderLockHelper.cancelCount(appContext),
+                cancelCount = cycleBeforeDecision.cancelCount,
                 cancelBeforeLockCount = config.cancelBeforeLockCount,
-                forceLockActive = ReminderLockHelper.forceLockActive(appContext),
+                forceLockActive = cycleBeforeDecision.phase == ScreenCycleSnapshot.PHASE_FORCE_LOCK,
                 nextAllowedAlertAt = prefs.getLong(KEY_NEXT_ALLOWED_ALERT_AT, 0L),
             ),
         )
@@ -207,7 +214,7 @@ object ScreenStateTracker {
 
         if (decision.shouldClear) {
             ReminderLockHelper.resetCancelCount(appContext)
-            prefs.edit().putLong(KEY_NEXT_ALLOWED_ALERT_AT, 0L).putString(KEY_ACTIVE_SESSION_ID, "").apply()
+            prefs.edit().putLong(KEY_NEXT_ALLOWED_ALERT_AT, 0L).apply()
             AlertCoordinator.dismissScreenAlert(appContext)
         }
 
@@ -242,7 +249,7 @@ object ScreenStateTracker {
             .putBoolean(KEY_REST_REQUIRED, true)
             .putLong(KEY_NEXT_ALLOWED_ALERT_AT, next)
             .putLong(KEY_NEXT_SCREEN_CHECK_AT, next)
-            .putString(KEY_ACTIVE_SESSION_ID, "")
+            
             .commit()
         AlertCoordinator.dismissScreenAlert(appContext, sessionId)
         if (shouldLock) executeForceLock(appContext)
@@ -258,7 +265,7 @@ object ScreenStateTracker {
             .putBoolean(KEY_REST_REQUIRED, false)
             .putLong(KEY_REST_STARTED_AT, 0L)
             .putLong(KEY_NEXT_ALLOWED_ALERT_AT, 0L)
-            .putString(KEY_ACTIVE_SESSION_ID, "")
+            
             .apply()
         ReminderLockHelper.resetCancelCount(appContext)
         AlertCoordinator.dismissScreenAlert(appContext)
@@ -274,7 +281,7 @@ object ScreenStateTracker {
             .putLong(KEY_REST_STARTED_AT, 0L)
             .putLong(KEY_NEXT_SCREEN_CHECK_AT, 0L)
             .putLong(KEY_NEXT_ALLOWED_ALERT_AT, 0L)
-            .putString(KEY_ACTIVE_SESSION_ID, "")
+            
             .apply()
         ReminderLockHelper.resetCancelCount(appContext)
         AlertCoordinator.dismissScreenAlert(appContext)
@@ -294,6 +301,21 @@ object ScreenStateTracker {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         recordState(context, if (powerManager.isInteractive) "on" else "off", System.currentTimeMillis())
     }
+
+    fun cycleSnapshot(context: Context): ScreenCycleSnapshot {
+        val appContext = context.applicationContext
+        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return cycleSnapshot(appContext, ReminderPreferences.read(appContext), prefs, System.currentTimeMillis())
+    }
+
+    private fun cycleSnapshot(context: Context, config: ReminderConfig, prefs: android.content.SharedPreferences, now: Long): ScreenCycleSnapshot =
+        ReminderLockHelper.migrateAndSnapshot(
+            context,
+            config.cancelBeforeLockCount,
+            prefs.getBoolean(KEY_REST_REQUIRED, false),
+            prefs.getLong(KEY_GRACE_UNTIL, 0L),
+            now,
+        )
 
     private fun recordState(context: Context, state: String, timestamp: Long) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
