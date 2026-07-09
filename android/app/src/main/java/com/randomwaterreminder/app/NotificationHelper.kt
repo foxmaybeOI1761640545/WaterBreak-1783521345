@@ -72,6 +72,7 @@ object NotificationHelper {
         title: String,
         text: String,
         config: ReminderConfig = ReminderPreferences.read(context),
+        sessionId: String = "",
     ): AlertResult {
         ensureChannels(context, config)
         if (!hasNotificationPermission(context)) {
@@ -84,7 +85,7 @@ object NotificationHelper {
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val requestFullScreen = !powerManager.isInteractive && canUseFullScreenIntent(context)
-        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen)
+        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen, sessionId)
         return runCatching {
             NotificationManagerCompat.from(context).notify(notificationId(type), notification)
             AlertResult(
@@ -110,11 +111,12 @@ object NotificationHelper {
         text: String,
         config: ReminderConfig,
         fullScreen: Boolean,
+        sessionId: String = "",
     ): Notification {
         val pendingIntent = PendingIntent.getActivity(
             context,
             requestCode(type),
-            ReminderAlertActivity.intent(context, type, title, text),
+            ReminderAlertActivity.intent(context, type, title, text, sessionId = sessionId),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(context, channelId(type))
@@ -163,6 +165,16 @@ object NotificationHelper {
         cancelAlert(context, ReminderType.SCREEN_LIMIT)
     }
 
+    fun cancelVibration(context: Context) {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(VibratorManager::class.java).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+        vibrator.cancel()
+    }
+
     fun vibrateAlert(context: Context): Boolean {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             context.getSystemService(VibratorManager::class.java).defaultVibrator
@@ -203,7 +215,7 @@ object NotificationHelper {
             if (type == ReminderType.WATER) "喝水提醒" else "亮屏超时提醒",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = if (type == ReminderType.WATER) "随机喝水提醒通知" else "亮屏时间过长提醒通知"
+            description = if (type == ReminderType.WATER) "水息守护喝水提醒通知" else "水息守护亮屏时间过长提醒通知"
             enableVibration(false)
             setSound(null, null)
         }

@@ -2,7 +2,7 @@ import { registerPlugin } from '@capacitor/core'
 
 export type ReminderSoundMode = 'default' | 'custom'
 export type ReminderType = 'water' | 'screen_limit'
-export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown'
+export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown' | 'unavailable' | 'optional'
 
 export interface ReminderConfig {
   enabled: boolean
@@ -28,6 +28,10 @@ export interface ReminderConfig {
   screenCustomSoundUri?: string
   screenCustomSoundName?: string
   screenVolumePercent: number
+  screenCyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  screenCycleLimit?: number
+  screenCycleActiveSessionId?: string
+  screenCycleSessionStartedAt?: number
   waterAlarmScheduled?: boolean
   waterAlarmExact?: boolean
   waterAlarmReason?: string
@@ -55,6 +59,9 @@ export interface PermissionStatus {
   waterChannelImportance?: number
   screenChannelEnabled?: boolean
   screenChannelImportance?: number
+  deviceAdmin?: PermissionValue
+  batteryOptimization?: PermissionValue
+  manufacturerSettingsAvailable?: boolean
 }
 
 export interface ScreenStateStatus {
@@ -67,6 +74,11 @@ export interface ScreenStateStatus {
   restStartedAt?: number
   nextScreenCheckAt?: number
   trackingReliable?: boolean
+  cycleCancelCount?: number
+  cycleLimit?: number
+  cyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'grace'
+  cycleActiveSessionId?: string
+  cycleSessionStartedAt?: number
   trackingNote: string
 }
 
@@ -94,6 +106,7 @@ export interface CustomSoundPayload {
 }
 
 export interface ReminderTypePayload { type: ReminderType }
+export interface SettingsLaunchResult { opened: boolean; target?: string; fallback?: boolean; reason?: string }
 
 export interface WaterReminderPlugin {
   startReminder(config: ReminderConfig): Promise<ReminderStatus>
@@ -105,11 +118,15 @@ export interface WaterReminderPlugin {
   getScreenState(): Promise<ScreenStateStatus>
   requestNotificationPermission(): Promise<PermissionStatus>
   getPermissionStatus(): Promise<PermissionStatus>
-  openExactAlarmSettings(): Promise<{ opened: boolean }>
-  openNotificationSettings(payload?: ReminderTypePayload): Promise<{ opened: boolean }>
-  openOverlaySettings(): Promise<{ opened: boolean }>
-  openUsageAccessSettings(): Promise<{ opened: boolean }>
-  openFullScreenIntentSettings(): Promise<{ opened: boolean }>
+  openExactAlarmSettings(): Promise<SettingsLaunchResult>
+  openNotificationSettings(payload?: ReminderTypePayload): Promise<SettingsLaunchResult>
+  openOverlaySettings(): Promise<SettingsLaunchResult>
+  openUsageAccessSettings(): Promise<SettingsLaunchResult>
+  openFullScreenIntentSettings(): Promise<SettingsLaunchResult>
+  openDeviceAdminSettings(): Promise<SettingsLaunchResult>
+  openAppDetailsSettings(): Promise<SettingsLaunchResult>
+  openManufacturerPermissionSettings(payload?: { target?: string }): Promise<SettingsLaunchResult>
+  openBatteryOptimizationSettings(): Promise<SettingsLaunchResult>
 }
 
 export const WaterReminder = registerPlugin<WaterReminderPlugin>('WaterReminder')

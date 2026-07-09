@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import java.lang.ref.WeakReference
 
 class OverlayAlertService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -34,10 +35,16 @@ class OverlayAlertService : Service() {
         stopSelfSafely()
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        activeService = WeakReference(this)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISMISS) {
             val requestedType = ReminderType.from(intent.getStringExtra(EXTRA_TYPE))
-            if (requestedType == currentType) {
+            val requestedSession = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+            if (requestedType == currentType && (requestedSession.isBlank() || requestedSession == sessionId)) {
                 removeOverlay()
                 stopSelfSafely()
             }
@@ -162,14 +169,13 @@ class OverlayAlertService : Service() {
             return
         }
         Toast.makeText(this, "请在弹出的页面中授予设备管理权限。", Toast.LENGTH_LONG).show()
-        runCatching { startActivity(ReminderAlertActivity.intent(this, ReminderType.SCREEN_LIMIT, title, text)) }
+        runCatching { startActivity(ReminderAlertActivity.intent(this, ReminderType.SCREEN_LIMIT, title, text, sessionId = sessionId)) }
         removeOverlay()
         stopSelfSafely()
     }
 
     private fun cancelScreenAlert(title: String, text: String) {
         if (isTest) { AlertCoordinator.dismissScreenAlert(this, sessionId); stopSelfSafely(); return }
-        val config = ReminderPreferences.read(this)
         if (ScreenStateTracker.recordScreenAlertCancel(this, sessionId)) {
             lockFromOverlay(title, text)
             return
@@ -177,6 +183,13 @@ class OverlayAlertService : Service() {
         Toast.makeText(this, "已取消本次提醒，未完成息屏休息前仍会再次提醒。", Toast.LENGTH_SHORT).show()
         removeOverlay()
         stopSelfSafely()
+    }
+
+    private fun dismissIfMatches(type: ReminderType, requestedSessionId: String) {
+        if (type == currentType && (requestedSessionId.isBlank() || requestedSessionId == sessionId)) {
+            removeOverlay()
+            stopSelfSafely()
+        }
     }
 
     private fun fallbackToNotification(title: String, text: String, config: ReminderConfig, cause: String) {
@@ -218,6 +231,7 @@ class OverlayAlertService : Service() {
     }
 
     override fun onDestroy() {
+        if (activeService?.get() === this) activeService = null
         removeOverlay()
         super.onDestroy()
     }
@@ -243,6 +257,7 @@ class OverlayAlertService : Service() {
         private const val EXTRA_IS_TEST = "isTest"
         private const val EXTRA_SESSION_ID = "sessionId"
         private const val AUTO_DISMISS_MILLIS = 2L * 60L * 1000L
+        @Volatile private var activeService: WeakReference<OverlayAlertService>? = null
 
         fun start(
             context: Context,
@@ -267,10 +282,15 @@ class OverlayAlertService : Service() {
             }.getOrDefault(false)
         }
 
-        fun dismiss(context: Context, type: ReminderType) {
-            // stopService triggers onDestroy(), which always removes the current overlay.
-            // Avoid starting a background service only to dismiss it.
-            runCatching { context.stopService(Intent(context, OverlayAlertService::class.java)) }
+        fun dismiss(context: Context, type: ReminderType, sessionId: String = "") {
+            // Never start a foreground service only to dismiss an overlay: on Android O+
+            // that path can crash if startForeground() is not called quickly enough.
+            val service = activeService?.get()
+            if (service != null) {
+                service.handler.post { service.dismissIfMatches(type, sessionId) }
+                return
+            }
+            runCatching { context.applicationContext.stopService(Intent(context, OverlayAlertService::class.java)) }
         }
     }
 }
