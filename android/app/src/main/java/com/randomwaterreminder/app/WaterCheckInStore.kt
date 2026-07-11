@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Calendar
 import java.util.UUID
 
 data class WaterNotDrankResult(
@@ -128,6 +129,26 @@ object WaterCheckInStore {
     fun snapshot(context: Context, limit: Int = 20): JSONObject = synchronized(lock) {
         val p = prefs(context)
         val stored = records(p)
+        val now = System.currentTimeMillis()
+        val todayStart = Calendar.getInstance().apply {
+            timeInMillis = now
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        var todayTotalMl = 0
+        var todayRecordCount = 0
+        var lastDrankAt = 0L
+        for (index in 0 until stored.length()) {
+            val record = stored.optJSONObject(index) ?: continue
+            val timestamp = record.optLong("timestamp", 0L)
+            if (record.optString("type") == "drank" && timestamp in todayStart..now) {
+                todayTotalMl += record.optInt("amountMl", 0).coerceAtLeast(0)
+                todayRecordCount += 1
+                lastDrankAt = maxOf(lastDrankAt, timestamp)
+            }
+        }
         val recent = JSONArray()
         val start = (stored.length() - limit.coerceIn(1, MAX_RECORDS)).coerceAtLeast(0)
         for (index in stored.length() - 1 downTo start) {
@@ -138,6 +159,9 @@ object WaterCheckInStore {
         JSONObject()
             .put("consecutiveNotDrank", p.getInt(KEY_CONSECUTIVE_NOT_DRANK, 0).coerceAtLeast(0))
             .put("requiresStatePhoto", p.getInt(KEY_CONSECUTIVE_NOT_DRANK, 0) >= 3)
+            .put("todayTotalMl", todayTotalMl)
+            .put("todayRecordCount", todayRecordCount)
+            .put("lastDrankAt", lastDrankAt)
             .put("records", recent)
     }
 

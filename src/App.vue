@@ -68,7 +68,7 @@ const state = reactive<State>({
   permissions: null,
   screenState: null,
   screenDataStale: false,
-  waterHistory: { consecutiveNotDrank: 0, requiresStatePhoto: false, records: [] },
+  waterHistory: { consecutiveNotDrank: 0, requiresStatePhoto: false, todayTotalMl: 0, todayRecordCount: 0, lastDrankAt: 0, records: [] },
   now: Date.now(),
   nextReminderInput: '',
   activePage: 'water',
@@ -103,6 +103,9 @@ const screenCyclePhase = computed(() => state.screenState?.cyclePhase ?? state.s
 const screenCycleCount = computed(() => state.screenState?.cycleCancelCount ?? state.status.cancelCycleCount ?? 0)
 const screenCycleLimit = computed(() => state.screenState?.cycleLimit ?? state.status.screenCycleLimit ?? state.status.cancelBeforeLockCount ?? 1)
 const latestWaterRecord = computed(() => state.waterHistory.records[0])
+const todayWaterAverageMl = computed(() => state.waterHistory.todayRecordCount > 0 ? Math.round(state.waterHistory.todayTotalMl / state.waterHistory.todayRecordCount) : 0)
+const todayWaterDateText = computed(() => new Date(state.now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }))
+const lastDrankTimeText = computed(() => state.waterHistory.lastDrankAt ? new Date(state.waterHistory.lastDrankAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '暂无')
 const cancelCycleText = computed(() => {
   if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
   if (screenCyclePhase.value === 'alerting') return '提醒中'
@@ -121,6 +124,7 @@ let appStateHandle: PluginListenerHandle | undefined
 let appUrlOpenHandle: PluginListenerHandle | undefined
 let messageTimer: number | undefined
 let screenDashboardRefresh: Promise<void> | null = null
+let waterSummaryDayKey = new Date().toDateString()
 const contentScroller = ref<HTMLElement | null>(null)
 const touchStart = reactive({ x: 0, y: 0, active: false })
 
@@ -501,7 +505,14 @@ function handleAppLaunchUrl(url?: string) {
 onMounted(() => {
   refreshStatus()
   history.replaceState({ appPage: state.activePage, settingsSource: state.settingsSource }, '', location.href)
-  ticker = window.setInterval(() => { state.now = Date.now() }, 1000)
+  ticker = window.setInterval(() => {
+    state.now = Date.now()
+    const dayKey = new Date(state.now).toDateString()
+    if (dayKey !== waterSummaryDayKey) {
+      waterSummaryDayKey = dayKey
+      refreshStatus()
+    }
+  }, 1000)
   screenRefreshTicker = window.setInterval(refreshScreenStateOnly, 15_000)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('popstate', handlePopState)
@@ -535,6 +546,16 @@ onUnmounted(() => {
 
     <main ref="contentScroller" class="app-content" :class="{ 'main-dashboard': state.activePage === 'water' || state.activePage === 'screen' }" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
       <template v-if="state.activePage === 'water'">
+        <section class="today-water-card" aria-label="今日饮水统计">
+          <div class="water-card-heading"><div><span>今日饮水</span><small>{{ todayWaterDateText }}</small></div><div class="water-drop" aria-hidden="true">💧</div></div>
+          <div class="water-total"><strong>{{ state.waterHistory.todayTotalMl.toLocaleString('zh-CN') }}</strong><span>ml</span></div>
+          <div class="water-today-stats">
+            <div><span>今日记录</span><strong>{{ state.waterHistory.todayRecordCount }} 次</strong></div>
+            <div><span>平均每次</span><strong>{{ todayWaterAverageMl }} ml</strong></div>
+            <div><span>最近一次</span><strong>{{ lastDrankTimeText }}</strong></div>
+          </div>
+          <p>{{ state.waterHistory.todayRecordCount ? '每一次认真记录，都让今天的饮水节奏更清晰。' : '完成一次“已喝”验证后，今日饮水量会显示在这里。' }}</p>
+        </section>
         <section class="card compact-dashboard-card">
           <div class="dashboard-card-title">
             <h2>喝水提醒概览</h2>

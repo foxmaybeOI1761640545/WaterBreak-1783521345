@@ -113,6 +113,9 @@ export interface WaterCheckInRecord {
 export interface WaterCheckInHistory {
   consecutiveNotDrank: number
   requiresStatePhoto: boolean
+  todayTotalMl: number
+  todayRecordCount: number
+  lastDrankAt: number
   records: WaterCheckInRecord[]
 }
 
