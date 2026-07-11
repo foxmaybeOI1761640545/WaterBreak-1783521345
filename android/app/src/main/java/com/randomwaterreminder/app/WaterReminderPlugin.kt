@@ -320,26 +320,42 @@ class WaterReminderPlugin : Plugin() {
         fallback: Intent? = null,
         fallbackTarget: String = "app_details",
     ) {
-        val primary = intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val packageManager = context.packageManager
-        val primaryResolved = primary.resolveActivity(packageManager) != null
-        val finalIntent: Intent
-        val finalTarget: String
-        val usedFallback: Boolean
-        when {
-            primaryResolved -> { finalIntent = primary; finalTarget = target; usedFallback = false }
-            fallback != null && fallback.resolveActivity(packageManager) != null -> { finalIntent = fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); finalTarget = fallbackTarget; usedFallback = true }
-            else -> {
-                call.resolve(settingsResult(false, target, reason = "系统没有可打开的设置页面，请手动进入系统设置"))
-                return
+        val hostActivity = activity
+
+        fun launch(candidate: Intent): Result<Unit> = runCatching {
+            // Do not preflight system Settings intents with resolveActivity(). On
+            // Android 11+ and some MIUI/HyperOS builds package visibility may make
+            // that check return null even though startActivity() succeeds.
+            if (hostActivity != null) {
+                hostActivity.startActivity(candidate)
+            } else {
+                context.startActivity(candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }
-        runCatching { (activity ?: context).startActivity(finalIntent) }
-            .onSuccess { call.resolve(settingsResult(true, finalTarget, usedFallback)) }
-            .onFailure { error ->
-                if (error is ActivityNotFoundException) call.resolve(settingsResult(false, finalTarget, usedFallback, "系统没有可打开的设置页面"))
-                else call.resolve(settingsResult(false, finalTarget, usedFallback, error.message ?: "无法打开系统设置"))
+
+        val primaryResult = launch(intent)
+        if (primaryResult.isSuccess) {
+            call.resolve(settingsResult(true, target))
+            return
+        }
+
+        if (fallback != null) {
+            val fallbackResult = launch(fallback)
+            if (fallbackResult.isSuccess) {
+                call.resolve(settingsResult(true, fallbackTarget, fallback = true))
+                return
             }
+            val error = fallbackResult.exceptionOrNull() ?: primaryResult.exceptionOrNull()
+            call.resolve(settingsResult(false, fallbackTarget, fallback = true, reason = settingsLaunchError(error)))
+            return
+        }
+
+        call.resolve(settingsResult(false, target, reason = settingsLaunchError(primaryResult.exceptionOrNull())))
+    }
+
+    private fun settingsLaunchError(error: Throwable?): String = when (error) {
+        is ActivityNotFoundException -> "系统没有可打开的设置页面"
+        else -> error?.message ?: "无法打开系统设置"
     }
 
     private fun settingsResult(opened: Boolean, target: String, fallback: Boolean = false, reason: String? = null): JSObject = JSObject().apply {
