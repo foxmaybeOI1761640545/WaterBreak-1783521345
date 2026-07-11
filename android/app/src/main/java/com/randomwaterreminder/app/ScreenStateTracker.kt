@@ -205,6 +205,7 @@ object ScreenStateTracker {
             ReminderLockHelper.resetCancelCount(appContext)
             AlertCoordinator.dismissScreenAlert(appContext)
             ScreenOnLimitAlarmScheduler.scheduleAt(appContext, graceUntil)
+            NotificationHelper.refreshScreenStatus(appContext, config)
             return false
         }
 
@@ -255,6 +256,7 @@ object ScreenStateTracker {
         } else {
             ScreenOnLimitAlarmScheduler.reschedule(appContext, refreshState = false, forceRecalculate = true)
         }
+        NotificationHelper.refreshScreenStatus(appContext, config)
         return decision.shouldAlert
     }
 
@@ -280,6 +282,7 @@ object ScreenStateTracker {
             else -> now + ReminderLockHelper.FORCE_LOCK_RECHECK_INTERVAL_MS
         }
         ScreenOnLimitAlarmScheduler.scheduleAt(appContext, nextCheck)
+        NotificationHelper.refreshScreenStatus(appContext, config)
         return consumed.copy(lockResult = lockResult)
     }
 
@@ -298,6 +301,7 @@ object ScreenStateTracker {
         refreshFromSystem(appContext)
         ensureInitialState(appContext)
         ScreenOnLimitAlarmScheduler.reschedule(appContext, refreshState = false, forceRecalculate = true)
+        NotificationHelper.refreshScreenStatus(appContext)
     }
 
     fun clearRestState(context: Context) {
@@ -312,6 +316,7 @@ object ScreenStateTracker {
         ReminderLockHelper.resetCancelCount(appContext)
         AlertCoordinator.dismissScreenAlert(appContext)
         ScreenOnLimitAlarmScheduler.cancel(appContext)
+        NotificationHelper.cancelScreenStatus(appContext)
     }
 
     fun retryForceLock(context: Context): LockAttemptResult = executeForceLock(context.applicationContext, closeActivity = true)
@@ -364,6 +369,7 @@ object ScreenStateTracker {
                     .apply()
                 ReminderLockHelper.resetCancelCount(context)
                 AlertCoordinator.dismissScreenAlert(context)
+                NotificationHelper.refreshScreenStatus(context)
             } else {
                 prefs.edit().putString(KEY_RAPID_ON_TIMES, recent.joinToString(",")).commit()
             }

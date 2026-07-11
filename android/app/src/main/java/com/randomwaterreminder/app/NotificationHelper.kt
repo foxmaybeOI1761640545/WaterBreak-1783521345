@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
@@ -18,15 +19,23 @@ import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
 object NotificationHelper {
     const val WATER_CHANNEL_ID = "water_reminder_alert_v1"
     const val SCREEN_CHANNEL_ID = "screen_limit_alert_v1"
     const val OVERLAY_RUNTIME_CHANNEL_ID = "overlay_runtime_v1"
+    const val STATUS_CHANNEL_ID = "reminder_status_v2"
     private const val CHANNEL_STATE_PREFS = "notification_channel_state"
     private const val WATER_NOTIFICATION_ID = 1001
     private const val SCREEN_NOTIFICATION_ID = 5001
     const val OVERLAY_RUNTIME_NOTIFICATION_ID = 7001
+    private const val WATER_STATUS_NOTIFICATION_ID = 8001
+    private const val SCREEN_STATUS_NOTIFICATION_ID = 8002
+    private const val WATER_STATUS_REQUEST_CODE = 8101
+    private const val SCREEN_STATUS_REQUEST_CODE = 8102
     private val VIBRATION_PATTERN = longArrayOf(0, 350, 180, 350, 180, 350)
 
     fun ensureChannels(context: Context, config: ReminderConfig = ReminderPreferences.read(context)) {
@@ -34,6 +43,7 @@ object NotificationHelper {
         ensureAlertChannel(context, ReminderType.WATER, config)
         ensureAlertChannel(context, ReminderType.SCREEN_LIMIT, config)
         ensureOverlayRuntimeChannel(context)
+        ensureStatusChannel(context)
     }
 
     fun recreateAlertChannel(context: Context, type: ReminderType, config: ReminderConfig = ReminderPreferences.read(context)) {
@@ -159,6 +169,62 @@ object NotificationHelper {
             .build()
     }
 
+    fun refreshStatusNotifications(context: Context) {
+        val appContext = context.applicationContext
+        val config = ReminderPreferences.read(appContext)
+        refreshWaterStatus(appContext, config)
+        refreshScreenStatus(appContext, config)
+    }
+
+    fun refreshWaterStatus(
+        context: Context,
+        config: ReminderConfig = ReminderPreferences.read(context.applicationContext),
+    ) {
+        val appContext = context.applicationContext
+        if (!config.enabled || config.nextReminderTime <= 0L) {
+            cancelWaterStatus(appContext)
+            return
+        }
+        if (!hasNotificationPermission(appContext)) return
+        ensureStatusChannel(appContext)
+        val notification = buildStatusNotification(
+            appContext,
+            title = "下次喝水提醒时间",
+            text = formatNextReminderTime(config.nextReminderTime),
+            requestCode = WATER_STATUS_REQUEST_CODE,
+        )
+        runCatching { NotificationManagerCompat.from(appContext).notify(WATER_STATUS_NOTIFICATION_ID, notification) }
+    }
+
+    fun refreshScreenStatus(
+        context: Context,
+        config: ReminderConfig = ReminderPreferences.read(context.applicationContext),
+    ) {
+        val appContext = context.applicationContext
+        if (!config.screenLimitEnabled || config.screenOnLimitMinutes <= 0) {
+            cancelScreenStatus(appContext)
+            return
+        }
+        if (!hasNotificationPermission(appContext)) return
+        ensureStatusChannel(appContext)
+        val cycle = ScreenStateTracker.cycleSnapshot(appContext)
+        val notification = buildStatusNotification(
+            appContext,
+            title = "亮屏阈值 · 循环次数",
+            text = "阈值 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟 · 循环 ${cycle.cancelCount}/${cycle.limit} 次",
+            requestCode = SCREEN_STATUS_REQUEST_CODE,
+        )
+        runCatching { NotificationManagerCompat.from(appContext).notify(SCREEN_STATUS_NOTIFICATION_ID, notification) }
+    }
+
+    fun cancelWaterStatus(context: Context) {
+        runCatching { NotificationManagerCompat.from(context.applicationContext).cancel(WATER_STATUS_NOTIFICATION_ID) }
+    }
+
+    fun cancelScreenStatus(context: Context) {
+        runCatching { NotificationManagerCompat.from(context.applicationContext).cancel(SCREEN_STATUS_NOTIFICATION_ID) }
+    }
+
     fun cancelAlert(context: Context, type: ReminderType) {
         runCatching { NotificationManagerCompat.from(context).cancel(notificationId(type)) }
     }
@@ -239,6 +305,74 @@ object NotificationHelper {
             },
         )
     }
+
+    private fun ensureStatusChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(STATUS_CHANNEL_ID) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                STATUS_CHANNEL_ID,
+                "提醒运行状态",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "常驻显示下次喝水提醒时间和亮屏提醒循环状态"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            },
+        )
+    }
+
+    private fun buildStatusNotification(
+        context: Context,
+        title: String,
+        text: String,
+        requestCode: Int,
+    ): Notification {
+        val launchIntent = (context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: Intent(context, MainActivity::class.java)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(context, STATUS_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setShowWhen(false)
+            .setContentIntent(pendingIntent)
+            .build()
+    }
+
+    private fun formatNextReminderTime(timestamp: Long, now: Long = System.currentTimeMillis()): String {
+        val target = Calendar.getInstance().apply { timeInMillis = timestamp }
+        val today = Calendar.getInstance().apply { timeInMillis = now }
+        val tomorrow = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+        val timeText = SimpleDateFormat("HH:mm", Locale.getDefault()).format(target.time)
+        return when {
+            isSameDay(target, today) -> "今天 $timeText"
+            isSameDay(target, tomorrow) -> "明天 $timeText"
+            else -> SimpleDateFormat("M月d日 E HH:mm", Locale.getDefault()).format(target.time)
+        }
+    }
+
+    private fun isSameDay(first: Calendar, second: Calendar): Boolean =
+        first.get(Calendar.ERA) == second.get(Calendar.ERA) &&
+            first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
+            first.get(Calendar.DAY_OF_YEAR) == second.get(Calendar.DAY_OF_YEAR)
 
     private fun deleteLegacyDynamicChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

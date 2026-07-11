@@ -24,6 +24,7 @@ object WaterReminderScheduler {
         val updated = current.copy(enabled = true, nextReminderTime = next)
         ReminderPreferences.save(context, updated)
         saveResult(context, scheduleAt(context, next))
+        NotificationHelper.refreshWaterStatus(context, updated)
         return updated
     }
 
@@ -33,14 +34,16 @@ object WaterReminderScheduler {
             cancelAlarmOnly(context)
             val result = AlarmScheduleResult(false, false, 0L, "喝水提醒未开启")
             saveResult(context, result)
+            NotificationHelper.cancelWaterStatus(context)
             return result
         }
         val now = System.currentTimeMillis()
         val trigger = config.nextReminderTime.takeIf { it > now } ?: calculateNextReminderTime(config, now)
-        if (trigger != config.nextReminderTime) {
-            ReminderPreferences.save(context, config.copy(nextReminderTime = trigger))
-        }
-        return scheduleAt(context, trigger).also { saveResult(context, it) }
+        val updated = config.copy(nextReminderTime = trigger)
+        if (trigger != config.nextReminderTime) ReminderPreferences.save(context, updated)
+        val result = scheduleAt(context, trigger).also { saveResult(context, it) }
+        NotificationHelper.refreshWaterStatus(context, updated)
+        return result
     }
 
     fun cancelReminder(context: Context): ReminderConfig {
@@ -48,6 +51,7 @@ object WaterReminderScheduler {
         val updated = ReminderPreferences.read(context).copy(enabled = false, nextReminderTime = 0L)
         ReminderPreferences.save(context, updated)
         saveResult(context, AlarmScheduleResult(false, false, 0L, "喝水提醒已关闭"))
+        NotificationHelper.cancelWaterStatus(context)
         return updated
     }
 

@@ -31,6 +31,7 @@ class WaterReminderPlugin : Plugin() {
         NotificationHelper.ensureChannels(context)
         ScreenStateTracker.start(context)
         WaterReminderScheduler.rescheduleIfEnabled(context)
+        NotificationHelper.refreshScreenStatus(context)
     }
 
     @PluginMethod
@@ -103,6 +104,7 @@ class WaterReminderPlugin : Plugin() {
             screenConfigChanged -> ScreenStateTracker.resetForConfigChange(context)
             else -> ScreenOnLimitAlarmScheduler.reschedule(context, forceRecalculate = true)
         }
+        NotificationHelper.refreshStatusNotifications(context)
         call.resolve(ReminderPreferences.read(context).toJsObject())
     }
 
@@ -117,6 +119,7 @@ class WaterReminderPlugin : Plugin() {
         NotificationHelper.ensureChannels(context, config)
         WaterReminderScheduler.rescheduleIfEnabled(context)
         ScreenStateTracker.start(context)
+        NotificationHelper.refreshStatusNotifications(context)
         call.resolve(ReminderPreferences.read(context).toJsObject())
     }
 
@@ -376,12 +379,14 @@ class WaterReminderPlugin : Plugin() {
         ) {
             requestPermissionForAlias("notifications", call, "notificationPermissionCallback")
         } else {
+            NotificationHelper.refreshStatusNotifications(context)
             call.resolve(permissionStatus())
         }
     }
 
     @PermissionCallback
     private fun notificationPermissionCallback(call: PluginCall) {
+        NotificationHelper.refreshStatusNotifications(context)
         call.resolve(permissionStatus())
     }
 

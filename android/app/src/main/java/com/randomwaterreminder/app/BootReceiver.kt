@@ -27,6 +27,7 @@ class BootReceiver : BroadcastReceiver() {
                 refreshState = false,
                 forceRecalculate = true,
             )
+            NotificationHelper.refreshStatusNotifications(appContext)
         }
     }
 }
