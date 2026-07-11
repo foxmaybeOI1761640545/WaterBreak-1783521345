@@ -19,6 +19,8 @@ export interface ReminderConfig {
   waterCustomSoundUri?: string
   waterCustomSoundName?: string
   waterVolumePercent: number
+  waterRetryMinutes: number
+  waterConsecutiveNotDrank?: number
   screenLimitEnabled: boolean
   screenOnLimitMinutes: number
   requiredScreenOffMinutes: number
@@ -99,6 +101,21 @@ export interface ScreenDashboardState extends ScreenStateStatus {
   screenVolumePercent: number
 }
 
+export interface WaterCheckInRecord {
+  id: string
+  type: 'drank' | 'not_drank' | 'state_check'
+  timestamp: number
+  amountMl?: number
+  photoFileName?: string
+  consecutiveNotDrank?: number
+}
+
+export interface WaterCheckInHistory {
+  consecutiveNotDrank: number
+  requiresStatePhoto: boolean
+  records: WaterCheckInRecord[]
+}
+
 export interface AlertResult {
   ok: boolean
   posted: boolean
@@ -134,6 +151,7 @@ export interface WaterReminderPlugin {
   useDefaultSound(payload?: ReminderTypePayload): Promise<ReminderStatus>
   getScreenState(): Promise<ScreenStateStatus>
   getScreenDashboardState(): Promise<ScreenDashboardState>
+  getWaterCheckInHistory(): Promise<WaterCheckInHistory>
   requestNotificationPermission(): Promise<PermissionStatus>
   getPermissionStatus(): Promise<PermissionStatus>
   openExactAlarmSettings(): Promise<SettingsLaunchResult>

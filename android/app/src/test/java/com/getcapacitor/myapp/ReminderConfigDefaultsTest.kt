@@ -18,6 +18,7 @@ class ReminderConfigDefaultsTest {
         assertEquals("稳健做人，认真做事。", config.waterNotificationText)
         assertEquals("default", config.waterSoundMode)
         assertEquals(100, config.waterVolumePercent)
+        assertEquals(10, config.waterRetryMinutes)
         assertTrue(config.screenLimitEnabled)
         assertEquals(5, config.screenOnLimitMinutes)
         assertEquals(5, config.requiredScreenOffMinutes)

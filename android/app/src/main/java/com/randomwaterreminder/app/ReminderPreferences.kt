@@ -25,6 +25,7 @@ object ReminderPreferences {
             waterCustomSoundUri = p.getString("waterCustomSoundUri", legacySoundUri) ?: legacySoundUri,
             waterCustomSoundName = p.getString("waterCustomSoundName", legacySoundName) ?: legacySoundName,
             waterVolumePercent = p.getInt("waterVolumePercent", 100).coerceIn(0, 100),
+            waterRetryMinutes = p.getInt("waterRetryMinutes", 10).coerceIn(1, 180),
             screenLimitEnabled = if (p.contains("screenLimitEnabled")) p.getBoolean("screenLimitEnabled", true) else if (p.contains("screenOnLimitMinutes")) p.getInt("screenOnLimitMinutes", 5) > 0 else true,
             screenOnLimitMinutes = p.getInt("screenOnLimitMinutes", 5),
             requiredScreenOffMinutes = p.getInt("requiredScreenOffMinutes", 5),
@@ -52,6 +53,7 @@ object ReminderPreferences {
             .putString("waterCustomSoundUri", config.waterCustomSoundUri)
             .putString("waterCustomSoundName", config.waterCustomSoundName)
             .putInt("waterVolumePercent", config.waterVolumePercent.coerceIn(0, 100))
+            .putInt("waterRetryMinutes", config.waterRetryMinutes.coerceIn(1, 180))
             .putBoolean("screenLimitEnabled", config.screenLimitEnabled)
             .putInt("screenOnLimitMinutes", config.screenOnLimitMinutes)
             .putInt("requiredScreenOffMinutes", config.requiredScreenOffMinutes)

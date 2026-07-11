@@ -27,11 +27,13 @@ object NotificationHelper {
     const val WATER_CHANNEL_ID = "water_reminder_alert_v1"
     const val SCREEN_CHANNEL_ID = "screen_limit_alert_v1"
     const val OVERLAY_RUNTIME_CHANNEL_ID = "overlay_runtime_v1"
+    const val SOUND_RUNTIME_CHANNEL_ID = "reminder_sound_runtime_v1"
     const val STATUS_CHANNEL_ID = "reminder_status_v2"
     private const val CHANNEL_STATE_PREFS = "notification_channel_state"
     private const val WATER_NOTIFICATION_ID = 1001
     private const val SCREEN_NOTIFICATION_ID = 5001
     const val OVERLAY_RUNTIME_NOTIFICATION_ID = 7001
+    const val SOUND_RUNTIME_NOTIFICATION_ID = 7002
     private const val WATER_STATUS_NOTIFICATION_ID = 8001
     private const val SCREEN_STATUS_NOTIFICATION_ID = 8002
     private const val WATER_STATUS_REQUEST_CODE = 8101
@@ -43,6 +45,7 @@ object NotificationHelper {
         ensureAlertChannel(context, ReminderType.WATER, config)
         ensureAlertChannel(context, ReminderType.SCREEN_LIMIT, config)
         ensureOverlayRuntimeChannel(context)
+        ensureSoundRuntimeChannel(context)
         ensureStatusChannel(context)
     }
 
@@ -169,6 +172,32 @@ object NotificationHelper {
             .build()
     }
 
+    fun buildSoundRuntimeNotification(context: Context, type: ReminderType): Notification {
+        ensureSoundRuntimeChannel(context)
+        val launchIntent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("${context.packageName}://open/${if (type == ReminderType.WATER) "water" else "screen"}")
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            7102,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(context, SOUND_RUNTIME_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("正在播放提醒铃声")
+            .setContentText(if (type == ReminderType.WATER) "喝水提醒铃声播放中" else "亮屏超时提醒铃声播放中")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSilent(true)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(pendingIntent)
+            .build()
+    }
+
     fun refreshStatusNotifications(context: Context) {
         val appContext = context.applicationContext
         val config = ReminderPreferences.read(appContext)
@@ -192,6 +221,7 @@ object NotificationHelper {
             title = "下次喝水提醒时间",
             text = formatNextReminderTime(config.nextReminderTime),
             requestCode = WATER_STATUS_REQUEST_CODE,
+            targetPage = "water",
         )
         runCatching { NotificationManagerCompat.from(appContext).notify(WATER_STATUS_NOTIFICATION_ID, notification) }
     }
@@ -213,6 +243,7 @@ object NotificationHelper {
             title = "亮屏阈值 · 循环次数",
             text = "阈值 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟 · 循环 ${cycle.cancelCount}/${cycle.limit} 次",
             requestCode = SCREEN_STATUS_REQUEST_CODE,
+            targetPage = "screen",
         )
         runCatching { NotificationManagerCompat.from(appContext).notify(SCREEN_STATUS_NOTIFICATION_ID, notification) }
     }
@@ -306,6 +337,24 @@ object NotificationHelper {
         )
     }
 
+    private fun ensureSoundRuntimeChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(SOUND_RUNTIME_CHANNEL_ID) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                SOUND_RUNTIME_CHANNEL_ID,
+                "提醒铃声运行状态",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "仅在提醒铃声播放期间显示"
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            },
+        )
+    }
+
     private fun ensureStatusChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -329,9 +378,11 @@ object NotificationHelper {
         title: String,
         text: String,
         requestCode: Int,
+        targetPage: String,
     ): Notification {
-        val launchIntent = (context.packageManager.getLaunchIntentForPackage(context.packageName)
-            ?: Intent(context, MainActivity::class.java)).apply {
+        val launchIntent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("${context.packageName}://open/$targetPage")
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         val pendingIntent = PendingIntent.getActivity(

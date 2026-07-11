@@ -61,6 +61,7 @@ class WaterReminderPlugin : Plugin() {
             waterCustomSoundUri = current.waterCustomSoundUri,
             waterCustomSoundName = current.waterCustomSoundName,
             waterVolumePercent = call.getInt("waterVolumePercent", current.waterVolumePercent) ?: current.waterVolumePercent,
+            waterRetryMinutes = call.getInt("waterRetryMinutes", current.waterRetryMinutes) ?: current.waterRetryMinutes,
             screenLimitEnabled = call.getBoolean("screenLimitEnabled", current.screenLimitEnabled) ?: current.screenLimitEnabled,
             screenOnLimitMinutes = call.getInt("screenOnLimitMinutes", current.screenOnLimitMinutes) ?: current.screenOnLimitMinutes,
             requiredScreenOffMinutes = call.getInt("requiredScreenOffMinutes", current.requiredScreenOffMinutes) ?: current.requiredScreenOffMinutes,
@@ -213,6 +214,11 @@ class WaterReminderPlugin : Plugin() {
     @PluginMethod
     fun getScreenDashboardState(call: PluginCall) {
         call.resolve(ScreenStateTracker.dashboardStatus(context))
+    }
+
+    @PluginMethod
+    fun getWaterCheckInHistory(call: PluginCall) {
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
     }
 
 
@@ -432,6 +438,7 @@ class WaterReminderPlugin : Plugin() {
         config.screenOnLimitMinutes < 0 -> "亮屏超时提醒分钟数不可小于 0"
         config.requiredScreenOffMinutes < 1 -> "连续息屏分钟数必须大于 0"
         config.cancelBeforeLockCount < 1 -> "取消后强制熄屏次数必须大于 0"
+        config.waterRetryMinutes !in 1..180 -> "未喝后的再次提醒间隔必须在 1-180 分钟之间"
         config.waterVolumePercent !in 0..100 || config.screenVolumePercent !in 0..100 -> "提醒音量必须在 0-100 之间"
         config.waterSoundMode == "custom" && config.waterCustomSoundUri.isBlank() -> "请先导入喝水提醒自定义提示音"
         config.screenSoundMode == "custom" && config.screenCustomSoundUri.isBlank() -> "请先导入屏幕提醒自定义提示音"
@@ -456,6 +463,8 @@ class WaterReminderPlugin : Plugin() {
             put("waterCustomSoundUri", waterCustomSoundUri)
             put("waterCustomSoundName", waterCustomSoundName)
             put("waterVolumePercent", waterVolumePercent)
+            put("waterRetryMinutes", waterRetryMinutes)
+            put("waterConsecutiveNotDrank", WaterCheckInStore.consecutiveNotDrank(context))
             put("screenLimitEnabled", screenLimitEnabled)
             put("screenOnLimitMinutes", screenOnLimitMinutes)
             put("requiredScreenOffMinutes", requiredScreenOffMinutes)

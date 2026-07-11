@@ -111,18 +111,16 @@ object AlertCoordinator {
         val app = context.applicationContext
         NotificationHelper.cancelScreenAlert(app)
         OverlayAlertService.dismiss(app, ReminderType.SCREEN_LIMIT, sessionId)
-        ReminderSoundPlayer.stop(app)
         NotificationHelper.cancelVibration(app)
         ReminderLockHelper.invalidateActiveSession(app, sessionId)
         if (closeActivity) ReminderAlertActivity.dismissActive(ReminderType.SCREEN_LIMIT, sessionId)
     }
 
-    fun dismissAlert(context: Context, type: ReminderType) {
+    fun dismissAlert(context: Context, type: ReminderType, closeActivity: Boolean = true) {
         val app = context.applicationContext
         NotificationHelper.cancelAlert(app, type)
         OverlayAlertService.dismiss(app, type)
-        ReminderSoundPlayer.stop(app)
         NotificationHelper.cancelVibration(app)
-        ReminderAlertActivity.dismissActive(type)
+        if (closeActivity) ReminderAlertActivity.dismissActive(type)
     }
 }

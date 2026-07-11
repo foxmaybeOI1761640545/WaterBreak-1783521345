@@ -15,6 +15,7 @@ data class ReminderConfig(
     val waterCustomSoundUri: String = "",
     val waterCustomSoundName: String = "",
     val waterVolumePercent: Int = 100,
+    val waterRetryMinutes: Int = 10,
     val screenLimitEnabled: Boolean = true,
     val screenOnLimitMinutes: Int = 5,
     val requiredScreenOffMinutes: Int = 5,

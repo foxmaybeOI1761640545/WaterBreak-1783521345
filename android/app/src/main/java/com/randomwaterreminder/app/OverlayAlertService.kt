@@ -30,12 +30,14 @@ class OverlayAlertService : Service() {
     private var resultReported = false
     private var isTest = false
     private var sessionId = ""
+    private var currentTitle = ""
+    private var currentText = ""
 
     private val autoDismiss = Runnable {
         if (currentType == ReminderType.SCREEN_LIMIT) {
             AlertCoordinator.dismissScreenAlert(this, sessionId)
         } else {
-            AlertCoordinator.dismissAlert(this, currentType)
+            handleWaterNotDrank()
         }
     }
 
@@ -58,6 +60,8 @@ class OverlayAlertService : Service() {
         val title = intent.getStringExtra(EXTRA_TITLE)
             ?: if (currentType == ReminderType.WATER) "该喝水啦" else "亮屏时间过长"
         val text = intent.getStringExtra(EXTRA_TEXT) ?: "请查看提醒。"
+        currentTitle = title
+        currentText = text
         val config = ReminderPreferences.read(this)
 
         val foregroundStarted = runCatching {
@@ -123,8 +127,12 @@ class OverlayAlertService : Service() {
             })
             if (type == ReminderType.WATER) {
                 addView(Button(context).apply {
-                    this.text = "知道了"
-                    setOnClickListener { AlertCoordinator.dismissAlert(this@OverlayAlertService, ReminderType.WATER) }
+                    this.text = "已喝"
+                    setOnClickListener { openWaterDrankVerification() }
+                })
+                addView(Button(context).apply {
+                    this.text = "未喝"
+                    setOnClickListener { handleWaterNotDrank() }
                 })
             } else {
                 addView(Button(context).apply {
@@ -173,6 +181,57 @@ class OverlayAlertService : Service() {
             result.error.isNotBlank() -> Toast.makeText(this, result.error, Toast.LENGTH_LONG).show()
         }
         AlertCoordinator.dismissScreenAlert(this, sessionId)
+    }
+
+    private fun openWaterDrankVerification() {
+        if (isTest) {
+            AlertCoordinator.dismissAlert(this, ReminderType.WATER)
+            Toast.makeText(this, "测试提醒已关闭，不保存喝水记录。", Toast.LENGTH_SHORT).show()
+            return
+        }
+        runCatching {
+            startActivity(ReminderAlertActivity.waterDrankIntent(this, currentTitle, currentText, false, sessionId))
+            AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
+        }.onFailure {
+            Toast.makeText(this, "无法打开喝水验证页面。", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun handleWaterNotDrank() {
+        if (isTest) {
+            AlertCoordinator.dismissAlert(this, ReminderType.WATER)
+            Toast.makeText(this, "测试提醒已关闭，不计入未喝次数。", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val result = WaterCheckInStore.recordNotDrank(this, sessionId)
+        if (!result.accepted) {
+            if (result.requiresStatePhoto) {
+                runCatching {
+                    startActivity(ReminderAlertActivity.waterForcedStateIntent(this, currentTitle, currentText, sessionId))
+                    AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
+                }
+                return
+            }
+            AlertCoordinator.dismissAlert(this, ReminderType.WATER)
+            Toast.makeText(this, "本次喝水提醒已经处理。", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (result.requiresStatePhoto) {
+            runCatching {
+                startActivity(ReminderAlertActivity.waterForcedStateIntent(this, currentTitle, currentText, sessionId))
+                AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
+            }.onFailure {
+                Toast.makeText(this, "无法打开状态验证页面。", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+        val config = ReminderPreferences.read(this)
+        WaterReminderScheduler.scheduleNextReminder(
+            this,
+            System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
+        )
+        AlertCoordinator.dismissAlert(this, ReminderType.WATER)
+        Toast.makeText(this, "将在 ${config.waterRetryMinutes} 分钟后再次提醒。", Toast.LENGTH_SHORT).show()
     }
 
     private fun cancelScreenAlert() {

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { App as CapacitorApp } from '@capacitor/app'
 import type { PluginListenerHandle } from '@capacitor/core'
-import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType } from './plugins/WaterReminder'
+import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType, type WaterCheckInHistory, type WaterCheckInRecord } from './plugins/WaterReminder'
 
 type MainPage = 'water' | 'screen'
 type AppPage = MainPage | 'waterSettings' | 'screenSettings' | 'permissionGuide'
@@ -18,6 +18,7 @@ interface State {
   permissions: PermissionStatus | null
   screenState: ScreenStateStatus | null
   screenDataStale: boolean
+  waterHistory: WaterCheckInHistory
   now: number
   nextReminderInput: string
   activePage: AppPage
@@ -47,6 +48,7 @@ const defaultStatus: ReminderStatus = {
   waterCustomSoundUri: '',
   waterCustomSoundName: '',
   waterVolumePercent: 100,
+  waterRetryMinutes: 10,
   screenLimitEnabled: true,
   screenOnLimitMinutes: 5,
   requiredScreenOffMinutes: 5,
@@ -66,6 +68,7 @@ const state = reactive<State>({
   permissions: null,
   screenState: null,
   screenDataStale: false,
+  waterHistory: { consecutiveNotDrank: 0, requiresStatePhoto: false, records: [] },
   now: Date.now(),
   nextReminderInput: '',
   activePage: 'water',
@@ -99,6 +102,7 @@ const lastScreenOffText = computed(() => formatTimestamp(state.screenState?.last
 const screenCyclePhase = computed(() => state.screenState?.cyclePhase ?? state.status.screenCyclePhase ?? 'idle')
 const screenCycleCount = computed(() => state.screenState?.cycleCancelCount ?? state.status.cancelCycleCount ?? 0)
 const screenCycleLimit = computed(() => state.screenState?.cycleLimit ?? state.status.screenCycleLimit ?? state.status.cancelBeforeLockCount ?? 1)
+const latestWaterRecord = computed(() => state.waterHistory.records[0])
 const cancelCycleText = computed(() => {
   if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
   if (screenCyclePhase.value === 'alerting') return '提醒中'
@@ -114,6 +118,7 @@ let ticker: number | undefined
 let screenRefreshTicker: number | undefined
 let backButtonHandle: PluginListenerHandle | undefined
 let appStateHandle: PluginListenerHandle | undefined
+let appUrlOpenHandle: PluginListenerHandle | undefined
 let messageTimer: number | undefined
 let screenDashboardRefresh: Promise<void> | null = null
 const contentScroller = ref<HTMLElement | null>(null)
@@ -141,6 +146,12 @@ function formatNextReminder(timestamp: number) {
   const prefix = target.toDateString() === now.toDateString() ? '今天' : target.toDateString() === tomorrow.toDateString() ? '明天' : target.toLocaleDateString('zh-CN')
   return `${prefix} ${pad(target.getHours())}:${pad(target.getMinutes())}`
 }
+function waterRecordText(record?: WaterCheckInRecord) {
+  if (!record) return '暂无记录'
+  if (record.type === 'drank') return `已喝 ${record.amountMl || 0} 毫升（含自拍）`
+  if (record.type === 'state_check') return '已完成状态自拍验证'
+  return `未喝（连续 ${record.consecutiveNotDrank || 1}/3 次）`
+}
 
 function buildConfig(overrides: Partial<ReminderConfig> = {}): ReminderConfig {
   return {
@@ -158,6 +169,7 @@ function buildConfig(overrides: Partial<ReminderConfig> = {}): ReminderConfig {
     waterCustomSoundUri: state.status.waterCustomSoundUri,
     waterCustomSoundName: state.status.waterCustomSoundName,
     waterVolumePercent: Number(state.status.waterVolumePercent ?? 100),
+    waterRetryMinutes: Number(state.status.waterRetryMinutes ?? 10),
     screenLimitEnabled: Boolean(state.status.screenLimitEnabled),
     screenOnLimitMinutes: Number(state.status.screenOnLimitMinutes ?? 5),
     requiredScreenOffMinutes: Number(state.status.requiredScreenOffMinutes ?? 5),
@@ -175,6 +187,7 @@ function validateConfig(config: ReminderConfig) {
   if (config.startMinute < 0 || config.startMinute > 59 || config.endMinute < 0 || config.endMinute > 59) throw new Error('分钟必须在 0-59 之间')
   if (config.minIntervalMinutes < 15) throw new Error('最小间隔至少 15 分钟')
   if (config.maxIntervalMinutes < config.minIntervalMinutes) throw new Error('最大间隔不可小于最小间隔')
+  if (config.waterRetryMinutes < 1 || config.waterRetryMinutes > 180) throw new Error('未喝后的再次提醒间隔必须在 1-180 分钟之间')
   if (config.screenOnLimitMinutes < 0) throw new Error('亮屏超时提醒分钟数不可小于 0')
   if (config.requiredScreenOffMinutes < 1) throw new Error('连续息屏分钟数必须大于 0')
   if (config.cancelBeforeLockCount < 1) throw new Error('取消后强制熄屏次数必须大于 0')
@@ -310,12 +323,14 @@ function setUserMessage(message: string, durationMs = state.activePage === 'scre
 async function refreshStatus(showMessage = false) {
   state.loading = true
   try {
-    const [status, permissions] = await Promise.all([
+    const [status, permissions, waterHistory] = await Promise.all([
       WaterReminder.getStatus(),
       WaterReminder.getPermissionStatus(),
+      WaterReminder.getWaterCheckInHistory(),
     ])
     state.status = { ...defaultStatus, ...status }
     state.permissions = permissions
+    state.waterHistory = waterHistory
     updateNextReminderInput()
     await refreshScreenDashboard(false)
     if (showMessage) setUserMessage('状态已更新')
@@ -475,6 +490,13 @@ function inferAudioMimeType(fileName: string) { return ({ mp3: 'audio/mpeg', wav
 function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '').split(',').pop() || ''); reader.onerror = () => reject(new Error('读取音频文件失败')); reader.readAsDataURL(file) }) }
 function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); if (state.permissionGuidePhase === 'waitingReturn' && !state.permissionGuideDidLeaveApp && Date.now() - state.permissionGuideLastOpenedAt > 1200) reviewPermissionReturn('web'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() } }
 function handleAppStateChange(isActive: boolean) { if (!isActive) { if (state.permissionGuidePhase === 'waitingReturn') state.permissionGuideDidLeaveApp = true; return } if (state.permissionGuidePhase === 'waitingReturn' && state.permissionGuideDidLeaveApp) reviewPermissionReturn('native'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() }
+function handleAppLaunchUrl(url?: string) {
+  if (!url) return
+  try {
+    const target = new URL(url).pathname.replace(/^\//, '')
+    if (target === 'water' || target === 'screen') switchPage(target)
+  } catch { /* Ignore unrelated or malformed launch URLs. */ }
+}
 
 onMounted(() => {
   refreshStatus()
@@ -485,6 +507,8 @@ onMounted(() => {
   window.addEventListener('popstate', handlePopState)
   CapacitorApp.addListener('backButton', () => navigateBack()).then(handle => { backButtonHandle = handle })
   CapacitorApp.addListener('appStateChange', ({ isActive }) => handleAppStateChange(isActive)).then(handle => { appStateHandle = handle })
+  CapacitorApp.addListener('appUrlOpen', ({ url }) => handleAppLaunchUrl(url)).then(handle => { appUrlOpenHandle = handle })
+  CapacitorApp.getLaunchUrl().then(result => handleAppLaunchUrl(result?.url)).catch(() => undefined)
 })
 onUnmounted(() => {
   if (ticker) window.clearInterval(ticker)
@@ -493,6 +517,7 @@ onUnmounted(() => {
   window.removeEventListener('popstate', handlePopState)
   backButtonHandle?.remove()
   appStateHandle?.remove()
+  appUrlOpenHandle?.remove()
   if (messageTimer) window.clearTimeout(messageTimer)
 })
 </script>
@@ -518,13 +543,18 @@ onUnmounted(() => {
               <span class="status-pill compact-status" :class="{ enabled: state.status.enabled }" :aria-label="isEnabledText" :title="isEnabledText">{{ state.status.enabled ? '已开启' : '已关闭' }}</span>
             </div>
           </div>
-          <p class="dashboard-note">到点后显示喝水提醒，确认后关闭，不计入屏幕取消循环。</p>
+          <p class="dashboard-note">到点后选择已喝或未喝；自拍、喝水量与状态验证仅保存在本机。</p>
+          <p v-if="state.waterHistory.requiresStatePhoto" class="dashboard-warning">已连续三次未喝，下次喝水提醒将要求完成状态自拍验证。</p>
           <div class="summary-grid compact">
             <div><span>下一次提醒</span><strong>{{ nextReminderText }}</strong></div>
             <div><span>提醒时段</span><strong>{{ timeRangeText }}</strong></div>
             <div><span>随机间隔</span><strong>{{ state.status.minIntervalMinutes }} - {{ state.status.maxIntervalMinutes }} 分钟</strong></div>
+            <div><span>未喝后重试</span><strong>{{ state.status.waterRetryMinutes }} 分钟</strong></div>
             <div><span>喝水铃声</span><strong>{{ waterSoundModeText }}</strong></div>
+            <div><span>连续未喝</span><strong>{{ state.waterHistory.consecutiveNotDrank }}/3 次</strong></div>
+            <div><span>最近记录</span><strong>{{ waterRecordText(latestWaterRecord) }}</strong></div>
           </div>
+          <details v-if="state.waterHistory.records.length" class="sound-note compact-note local-records"><summary>查看本地喝水记录</summary><div v-for="record in state.waterHistory.records.slice(0, 5)" :key="record.id"><span>{{ formatTimestamp(record.timestamp) }}</span><strong>{{ waterRecordText(record) }}</strong></div></details>
         </section>
         <section class="actions compact-actions">
           <button :disabled="state.loading || state.saving" @click="enableReminder">开启提醒</button>
@@ -595,6 +625,7 @@ onUnmounted(() => {
             <label>结束时间<input :value="timeValue(state.status.endHour, state.status.endMinute)" type="time" @input="updateTime('end', $event)" /></label>
             <label>最小间隔（分钟）<input v-model.number="state.status.minIntervalMinutes" type="number" min="15" max="360" /></label>
             <label>最大间隔（分钟）<input v-model.number="state.status.maxIntervalMinutes" type="number" min="15" max="360" /></label>
+            <label>未喝后再次提醒（分钟）<input v-model.number="state.status.waterRetryMinutes" type="number" min="1" max="180" /></label>
             <label>下次提醒时间<input v-model="state.nextReminderInput" type="datetime-local" /></label>
           </div>
           <label>通知标题<input v-model="state.status.waterNotificationTitle" type="text" /></label>
@@ -602,7 +633,7 @@ onUnmounted(() => {
         </section>
         <section class="card form-card">
           <h2>喝水提醒铃声</h2>
-          <div class="sound-status-list"><div><span>提示音</span><strong>{{ waterSoundModeText }}</strong></div><div><span>喝水音量</span><strong>{{ state.status.waterVolumePercent }}%</strong></div><div><span>音量说明</span><strong>应用内播放器音量，仍受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
+          <div class="sound-status-list"><div><span>提示音</span><strong>{{ waterSoundModeText }}</strong></div><div><span>喝水音量</span><strong>{{ state.status.waterVolumePercent }}%</strong></div><div><span>音量说明</span><strong>独立播放任务，关闭弹窗后仍播放到结束；受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
           <label>喝水提醒音量 {{ state.status.waterVolumePercent }}%<input v-model.number="state.status.waterVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.waterSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('water', 'default')">使用系统默认提示音</button>
@@ -625,7 +656,7 @@ onUnmounted(() => {
         </section>
         <section class="card form-card">
           <h2>屏幕提醒铃声</h2>
-          <div class="sound-status-list"><div><span>提示音</span><strong>{{ screenSoundModeText }}</strong></div><div><span>屏幕音量</span><strong>{{ state.status.screenVolumePercent }}%</strong></div><div><span>音量说明</span><strong>应用内播放器音量，仍受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>悬浮窗权限</span><strong>{{ state.permissions?.overlays ?? 'unknown' }}</strong></div><div><span>使用情况权限</span><strong>{{ state.permissions?.usageStats ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
+          <div class="sound-status-list"><div><span>提示音</span><strong>{{ screenSoundModeText }}</strong></div><div><span>屏幕音量</span><strong>{{ state.status.screenVolumePercent }}%</strong></div><div><span>音量说明</span><strong>独立播放任务，关闭弹窗后仍播放到结束；受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>悬浮窗权限</span><strong>{{ state.permissions?.overlays ?? 'unknown' }}</strong></div><div><span>使用情况权限</span><strong>{{ state.permissions?.usageStats ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
           <label>屏幕提醒音量 {{ state.status.screenVolumePercent }}%<input v-model.number="state.status.screenVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.screenSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('screen_limit', 'default')">使用系统默认提示音</button>

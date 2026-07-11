@@ -10,12 +10,14 @@ class WaterReminderReceiver : BroadcastReceiver() {
         ReceiverWork.run(this, "WaterReminderReceiver") {
             val config = ReminderPreferences.read(appContext)
             if (config.enabled) {
+                val sessionId = "water-${System.currentTimeMillis()}"
                 AlertCoordinator.alert(
                     appContext,
                     ReminderType.WATER,
                     config.waterNotificationTitle,
                     config.waterNotificationText,
                     config,
+                    sessionId = sessionId,
                 )
                 WaterReminderScheduler.scheduleNextReminder(appContext, requestedTime = null)
             }
