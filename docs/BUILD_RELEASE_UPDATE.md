@@ -82,10 +82,16 @@ Android 覆盖安装要求新旧 APK 的签名兼容。如果 v1.0.6 已经由�
 ```yaml
 concurrency:
   group: android-release-${{ github.repository }}
-  cancel-in-progress: false
+  queue: max
 ```
 
-多个 push 或 PR 同时触发时会排队，而不是取消旧任务。每个任务获得执行机会后重新拉取 Tag，再计算下一个版本，因此不会同时生成相同的 `1.0.7`。
+多个 push 或 PR 同时触发时会进入等待队列，而不是用较新的等待任务替换较旧任务。每个任务获得执行机会后重新拉取 Tag，再计算下一个版本，因此不会同时生成相同的 `1.0.7`。
+
+## Gradle 配置预检与签名指纹
+
+`UPDATE_REPOSITORY` 通过 `defaultConfig.buildConfigField` 写入 Android `BuildConfig`。发布工作流会在恢复签名材料前先运行 `gradle :app:tasks --all`，尽早发现 Gradle DSL 配置错误。
+
+固定 JKS 恢复后，工作流会导出签名证书并强制核对 SHA-256 指纹。证书与本次交付的固定签名不一致时立即失败，避免误用其他 JKS 后发布无法覆盖安装的 APK。
 
 ## 源码版本一致性
 

@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: android-release-${{ github.repository }}
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   build-release:
@@ -125,6 +125,11 @@ jobs:
       - name: Build web assets and sync Android
         run: npm run sync:android
 
+      - name: Validate Android Gradle configuration
+        env:
+          UPDATE_REPOSITORY: ${{ github.repository }}
+        run: cd android && gradle :app:tasks --all
+
       - name: Configure fixed release signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -147,6 +152,13 @@ jobs:
           echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD_INPUT" >> "$GITHUB_ENV"
           echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD_INPUT" >> "$GITHUB_ENV"
           keytool -list -keystore android/app/release-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD_INPUT" -alias "$ANDROID_KEY_ALIAS_INPUT" >/dev/null
+          expected_signing_sha256="5A491CDBA8BA998F015F637D5925A8A83A2364D5046CEC36CA1E11A467701470"
+          actual_signing_sha256="$(keytool -exportcert -keystore android/app/release-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD_INPUT" -alias "$ANDROID_KEY_ALIAS_INPUT" | sha256sum | awk '{print toupper($1)}')"
+          if [[ "$actual_signing_sha256" != "$expected_signing_sha256" ]]; then
+            echo "Signing certificate SHA-256 mismatch. Expected $expected_signing_sha256 but got $actual_signing_sha256"
+            exit 1
+          fi
+          echo "Signing certificate SHA-256 verified: $actual_signing_sha256"
 
       - name: Build signed release APK
         env:
