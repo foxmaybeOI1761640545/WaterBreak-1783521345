@@ -190,7 +190,7 @@ class OverlayAlertService : Service() {
             return
         }
         runCatching {
-            startActivity(ReminderAlertActivity.waterDrankIntent(this, currentTitle, currentText, false, sessionId))
+            startActivity(AppNavigation.waterCheckInIntent(this, sessionId, action = "drank"))
             AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
         }.onFailure {
             Toast.makeText(this, "无法打开喝水验证页面。", Toast.LENGTH_LONG).show()
@@ -207,7 +207,7 @@ class OverlayAlertService : Service() {
         if (!result.accepted) {
             if (result.requiresStatePhoto) {
                 runCatching {
-                    startActivity(ReminderAlertActivity.waterForcedStateIntent(this, currentTitle, currentText, sessionId))
+                    startActivity(AppNavigation.waterCheckInIntent(this, sessionId, action = "forced_state"))
                     AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
                 }
                 return
@@ -218,7 +218,7 @@ class OverlayAlertService : Service() {
         }
         if (result.requiresStatePhoto) {
             runCatching {
-                startActivity(ReminderAlertActivity.waterForcedStateIntent(this, currentTitle, currentText, sessionId))
+                startActivity(AppNavigation.waterCheckInIntent(this, sessionId, action = "forced_state"))
                 AlertCoordinator.dismissAlert(this, ReminderType.WATER, closeActivity = false)
             }.onFailure {
                 Toast.makeText(this, "无法打开状态验证页面。", Toast.LENGTH_LONG).show()
@@ -254,7 +254,7 @@ class OverlayAlertService : Service() {
     private fun fallbackToNotification(title: String, text: String, config: ReminderConfig, cause: String) {
         stopForegroundCompat(removeNotification = true)
         val notificationResult = runCatching {
-            NotificationHelper.showReminder(this, currentType, title, text, config, sessionId)
+            NotificationHelper.showReminder(this, currentType, title, text, config, sessionId, isTest)
         }.getOrElse {
             Log.e(TAG, "notification fallback failed", it)
             AlertResult(posted = false, reason = it.message ?: "通知兜底失败")

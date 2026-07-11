@@ -6,7 +6,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
@@ -86,6 +85,7 @@ object NotificationHelper {
         text: String,
         config: ReminderConfig = ReminderPreferences.read(context),
         sessionId: String = "",
+        isTest: Boolean = false,
     ): AlertResult {
         ensureChannels(context, config)
         if (!hasNotificationPermission(context)) {
@@ -100,7 +100,7 @@ object NotificationHelper {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             powerManager.isInteractive.not() && canUseFullScreenIntent(context)
         }.getOrDefault(false)
-        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen, sessionId)
+        val notification = buildReminderNotification(context, type, title, text, config, requestFullScreen, sessionId, isTest)
         return runCatching {
             NotificationManagerCompat.from(context).notify(notificationId(type), notification)
             AlertResult(
@@ -127,11 +127,17 @@ object NotificationHelper {
         config: ReminderConfig,
         fullScreen: Boolean,
         sessionId: String = "",
+        isTest: Boolean = false,
     ): Notification {
+        val reminderIntent = if (type == ReminderType.WATER) {
+            AppNavigation.waterCheckInIntent(context, sessionId, isTest)
+        } else {
+            ReminderAlertActivity.intent(context, type, title, text, sessionId = sessionId)
+        }
         val pendingIntent = PendingIntent.getActivity(
             context,
             requestCode(type),
-            ReminderAlertActivity.intent(context, type, title, text, sessionId = sessionId),
+            reminderIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(context, channelId(type))
@@ -174,11 +180,7 @@ object NotificationHelper {
 
     fun buildSoundRuntimeNotification(context: Context, type: ReminderType): Notification {
         ensureSoundRuntimeChannel(context)
-        val launchIntent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = Uri.parse("${context.packageName}://open/${if (type == ReminderType.WATER) "water" else "screen"}")
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
+        val launchIntent = AppNavigation.pageIntent(context, if (type == ReminderType.WATER) AppNavigation.PAGE_WATER else AppNavigation.PAGE_SCREEN)
         val pendingIntent = PendingIntent.getActivity(
             context,
             7102,
@@ -380,11 +382,7 @@ object NotificationHelper {
         requestCode: Int,
         targetPage: String,
     ): Notification {
-        val launchIntent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = Uri.parse("${context.packageName}://open/$targetPage")
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
+        val launchIntent = AppNavigation.pageIntent(context, targetPage)
         val pendingIntent = PendingIntent.getActivity(
             context,
             requestCode,

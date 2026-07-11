@@ -47,7 +47,7 @@ object AlertCoordinator {
         }
 
         val notificationResult = runCatching {
-            NotificationHelper.showReminder(app, type, title, text, config, sessionId)
+            NotificationHelper.showReminder(app, type, title, text, config, sessionId, isTest)
         }.getOrElse {
             Log.e(TAG, "notification failed type=${type.value} session=$sessionId", it)
             AlertResult(posted = false, reason = it.message ?: "通知失败")
@@ -66,8 +66,13 @@ object AlertCoordinator {
         notes += "悬浮:${overlayResult.reason}"
 
         val centerResult = runCatching {
-            app.startActivity(ReminderAlertActivity.intent(app, type, title, text, isTest, sessionId))
-            ChannelResult(true, "已显示居中弹窗")
+            if (type == ReminderType.WATER) {
+                app.startActivity(AppNavigation.waterCheckInIntent(app, sessionId, isTest))
+                ChannelResult(true, "已打开应用内喝水确认页")
+            } else {
+                app.startActivity(ReminderAlertActivity.intent(app, type, title, text, isTest, sessionId))
+                ChannelResult(true, "已显示居中弹窗")
+            }
         }.getOrElse {
             Log.w(TAG, "center activity failed type=${type.value} session=$sessionId", it)
             ChannelResult(false, it.message ?: "居中弹窗失败")

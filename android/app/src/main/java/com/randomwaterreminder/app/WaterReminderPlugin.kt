@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.admin.DevicePolicyManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,6 +21,7 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import org.json.JSONObject
 import java.io.File
 
 @CapacitorPlugin(
@@ -218,7 +220,151 @@ class WaterReminderPlugin : Plugin() {
 
     @PluginMethod
     fun getWaterCheckInHistory(call: PluginCall) {
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context, call.getInt("limit", 20) ?: 20)))
+    }
+
+    @PluginMethod
+    fun getWaterContainers(call: PluginCall) {
+        call.resolve(JSObject.fromJSONObject(JSONObject().put("containers", WaterContainerStore.list(context))))
+    }
+
+    @PluginMethod
+    fun saveWaterContainer(call: PluginCall) {
+        runCatching {
+            WaterContainerStore.save(
+                context,
+                call.getString("id"),
+                call.getString("name").orEmpty(),
+                call.getDouble("emptyWeightGrams") ?: Double.NaN,
+            )
+        }.onSuccess {
+            call.resolve(JSObject.fromJSONObject(JSONObject().put("containers", WaterContainerStore.list(context))))
+        }.onFailure { call.reject(it.message ?: "保存容器失败") }
+    }
+
+    @PluginMethod
+    fun deleteWaterContainer(call: PluginCall) {
+        val deleted = WaterContainerStore.delete(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject().put("deleted", deleted).put("containers", WaterContainerStore.list(context))))
+    }
+
+    @PluginMethod
+    fun dismissWaterAlertUi(call: PluginCall) {
+        AlertCoordinator.dismissAlert(context, ReminderType.WATER, closeActivity = false)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun saveWaterDrankRecord(call: PluginCall) {
+        val amountMl = call.getDouble("amountMl")
+        if (amountMl == null) {
+            call.reject("请输入有效饮水量")
+            return
+        }
+        val sessionId = call.getString("sessionId").orEmpty()
+        val photo = saveWaterPhoto(call, "drank") ?: return
+        val measurement = WaterMeasurement(
+            entryMode = call.getString("entryMode", "volume") ?: "volume",
+            containerId = call.getString("containerId").orEmpty(),
+            containerName = call.getString("containerName").orEmpty(),
+            emptyWeightGrams = call.getDouble("emptyWeightGrams"),
+            totalWeightGrams = call.getDouble("totalWeightGrams"),
+        )
+        if (!WaterCheckInStore.recordDrank(context, sessionId, amountMl, photo, measurement)) {
+            photo.delete()
+            call.reject("喝水记录保存失败或本次提醒已经处理")
+            return
+        }
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
+    }
+
+    @PluginMethod
+    fun recordWaterNotDrank(call: PluginCall) {
+        val result = WaterCheckInStore.recordNotDrank(context, call.getString("sessionId").orEmpty())
+        if (result.accepted && !result.requiresStatePhoto) {
+            val config = ReminderPreferences.read(context)
+            WaterReminderScheduler.scheduleNextReminder(
+                context,
+                System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
+            )
+        }
+        call.resolve(JSObject().apply {
+            put("accepted", result.accepted)
+            put("consecutiveCount", result.consecutiveCount)
+            put("requiresStatePhoto", result.requiresStatePhoto)
+            put("retryMinutes", ReminderPreferences.read(context).waterRetryMinutes)
+        })
+    }
+
+    @PluginMethod
+    fun saveWaterStateCheck(call: PluginCall) {
+        val photo = saveWaterPhoto(call, "state") ?: return
+        if (!WaterCheckInStore.recordForcedStatePhoto(context, call.getString("sessionId").orEmpty(), photo)) {
+            photo.delete()
+            call.reject("状态验证照片保存失败")
+            return
+        }
+        val config = ReminderPreferences.read(context)
+        WaterReminderScheduler.scheduleNextReminder(
+            context,
+            System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
+        )
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
+    }
+
+    @PluginMethod
+    fun getWaterPhoto(call: PluginCall) {
+        val file = WaterCheckInStore.photoFile(context, call.getString("photoFileName").orEmpty())
+        if (file == null) {
+            call.reject("找不到本地照片")
+            return
+        }
+        val mimeType = when (file.extension.lowercase()) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            else -> "image/jpeg"
+        }
+        call.resolve(JSObject().apply {
+            put("mimeType", mimeType)
+            put("dataBase64", Base64.encodeToString(file.readBytes(), Base64.NO_WRAP))
+        })
+    }
+
+    @PluginMethod
+    fun shareWaterDataExport(call: PluginCall) {
+        runCatching {
+            val archive = WaterDataArchive.create(context)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", archive)
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TITLE, archive.name)
+                clipData = ClipData.newRawUri(archive.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(Intent.createChooser(sendIntent, "导出喝水数据").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            archive.name
+        }.onSuccess { fileName ->
+            call.resolve(JSObject().apply { put("opened", true); put("fileName", fileName) })
+        }.onFailure { call.reject(it.message ?: "导出喝水数据失败") }
+    }
+
+    @PluginMethod
+    fun importWaterData(call: PluginCall) {
+        val dataBase64 = call.getString("dataBase64")
+        if (dataBase64.isNullOrBlank() || dataBase64.length > 260_000_000) {
+            call.reject("迁移档案为空或过大")
+            return
+        }
+        runCatching {
+            val archive = File(context.cacheDir, "water-import-${System.currentTimeMillis()}.zip")
+            archive.writeBytes(Base64.decode(dataBase64, Base64.DEFAULT))
+            WaterDataArchive.import(context, archive)
+        }.onSuccess {
+            call.resolve(JSObject.fromJSONObject(JSONObject()
+                .put("history", WaterCheckInStore.snapshot(context, 100))
+                .put("containers", WaterContainerStore.list(context))))
+        }.onFailure { call.reject(it.message ?: "导入喝水数据失败") }
     }
 
 
@@ -376,6 +522,33 @@ class WaterReminderPlugin : Plugin() {
 
     private fun appDetailsIntent(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") }
     private fun isXiaomiLikeDevice(): Boolean = listOf(Build.MANUFACTURER, Build.BRAND).any { it.contains("xiaomi", ignoreCase = true) || it.contains("redmi", ignoreCase = true) || it.contains("poco", ignoreCase = true) }
+
+    private fun saveWaterPhoto(call: PluginCall, prefix: String): File? {
+        val mimeType = call.getString("mimeType", "image/jpeg") ?: "image/jpeg"
+        val dataBase64 = call.getString("dataBase64")
+        if (!mimeType.startsWith("image/") || dataBase64.isNullOrBlank()) {
+            call.reject("请选择有效自拍图片")
+            return null
+        }
+        if (dataBase64.length > 30_000_000) {
+            call.reject("自拍图片过大，请选择小于约 20MB 的图片")
+            return null
+        }
+        val extension = when (mimeType.lowercase()) {
+            "image/png" -> "png"
+            "image/webp" -> "webp"
+            else -> "jpg"
+        }
+        return runCatching {
+            WaterCheckInStore.createPhotoFile(context, prefix, extension).apply {
+                writeBytes(Base64.decode(dataBase64, Base64.DEFAULT))
+                require(length() > 0L) { "自拍图片为空" }
+            }
+        }.getOrElse {
+            call.reject(it.message ?: "保存自拍失败")
+            null
+        }
+    }
 
     @PluginMethod
     fun requestNotificationPermission(call: PluginCall) {

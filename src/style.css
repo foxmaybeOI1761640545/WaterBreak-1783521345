@@ -245,3 +245,67 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
   .bottom-tabs { padding:6px; gap:6px; }
   .bottom-tabs button { padding:7px 5px; }
 }
+
+/* App-internal water check-in and portable local history. */
+.check-in-hero { display:flex; align-items:center; gap:16px; color:white; background:linear-gradient(135deg,#0284c7,#14b8a6); }
+.check-in-hero.urgent { background:linear-gradient(135deg,#ea580c,#ef4444); }
+.check-in-hero h2 { margin:0 0 6px; }
+.check-in-hero p { margin:0; color:rgba(255,255,255,.86); line-height:1.55; }
+.check-in-icon { display:grid; flex:0 0 auto; place-items:center; width:58px; height:58px; border-radius:20px; background:rgba(255,255,255,.18); font-size:1.75rem; }
+.check-in-choice { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.check-in-choice small { grid-column:1/-1; color:#557083; line-height:1.5; text-align:center; }
+.mode-switch { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:18px; padding:5px; border-radius:17px; background:#eaf7fb; }
+.mode-switch button { color:#557083; background:transparent; box-shadow:none; }
+.mode-switch button.active { color:white; background:linear-gradient(135deg,#0284c7,#14b8a6); }
+.calculation-card { display:grid; grid-template-columns:1fr auto; gap:5px 12px; margin:4px 0 16px; padding:16px; border-radius:18px; background:linear-gradient(135deg,#ecfeff,#ecfdf5); border:1px solid #a7f3d0; }
+.calculation-card span { color:#557083; }
+.calculation-card strong { color:#0f766e; font-size:1.45rem; }
+.calculation-card small { grid-column:1/-1; color:#6a8292; line-height:1.45; }
+.photo-picker { position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:66px; padding:14px 16px; border:1px dashed #38bdf8; border-radius:18px; background:#f0f9ff; cursor:pointer; }
+.photo-picker input { position:absolute; inline-size:1px; block-size:1px; opacity:0; pointer-events:none; }
+.photo-picker span { color:#0284c7; font-weight:900; text-align:right; overflow-wrap:anywhere; }
+.urgent-picker { border-color:#fb923c; background:#fff7ed; }
+.urgent-picker span { color:#c2410c; }
+.inline-message { margin:8px 0; padding:10px 12px; border-radius:13px; color:#166985; background:#f0f9ff; }
+.inline-message.warning { color:#b45309; background:#fff7ed; }
+.full-button { width:100%; }
+.state-check-card > p { color:#557083; line-height:1.55; }
+.history-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.history-summary div { display:flex; flex-direction:column; gap:5px; padding:18px; color:white; border-radius:21px; background:linear-gradient(135deg,#0284c7,#14b8a6); box-shadow:0 14px 28px rgba(2,132,199,.18); }
+.history-summary span { color:rgba(255,255,255,.76); font-size:.85rem; }
+.history-summary strong { font-size:1.35rem; }
+.history-list { display:grid; gap:10px; }
+.history-item { display:flex; gap:12px; padding:15px; border:1px solid rgba(82,150,176,.18); border-radius:20px; background:rgba(255,255,255,.9); box-shadow:0 10px 24px rgba(28,91,128,.08); }
+.history-marker { display:grid; flex:0 0 auto; place-items:center; width:44px; height:44px; border-radius:15px; background:#e0f2fe; }
+.history-marker.not_drank { background:#fff7ed; }
+.history-marker.state_check { background:#f3e8ff; }
+.history-content { min-width:0; flex:1; }
+.history-content > div:first-child { display:flex; justify-content:space-between; gap:12px; }
+.history-content time { flex:0 0 auto; color:#6a8292; font-size:.78rem; }
+.history-content button { margin-top:10px; }
+.history-content img { display:block; width:100%; max-height:420px; margin-top:10px; border-radius:16px; object-fit:contain; background:#eaf7fb; }
+.empty-history { text-align:center; }
+.empty-history > span { font-size:2.5rem; }
+.empty-history p { color:#557083; }
+.section-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.section-heading h2 { margin-bottom:5px; }
+.section-heading p { margin:0 0 16px; color:#557083; font-size:.88rem; line-height:1.45; }
+.container-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; align-items:end; gap:10px; padding:14px 0; border-top:1px solid rgba(82,150,176,.16); }
+.container-row label { margin:0; }
+.container-row > div { display:flex; gap:7px; padding-bottom:1px; }
+.container-row button { padding:11px 13px; }
+.danger-ghost { color:#b91c1c; background:white; border:1px solid #fecaca; box-shadow:none; }
+.data-transfer { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid rgba(82,150,176,.16); }
+
+@media (max-width:640px) {
+  .check-in-hero { padding:16px; }
+  .check-in-icon { width:48px; height:48px; border-radius:16px; }
+  .check-in-choice { grid-template-columns:1fr; }
+  .check-in-choice small { grid-column:auto; }
+  .mode-switch button { padding:11px 8px; font-size:.86rem; }
+  .history-content > div:first-child { flex-direction:column; gap:4px; }
+  .container-row { grid-template-columns:1fr 1fr; }
+  .container-row > div { grid-column:1/-1; }
+  .section-heading { align-items:center; }
+  .data-transfer { grid-template-columns:1fr; }
+}

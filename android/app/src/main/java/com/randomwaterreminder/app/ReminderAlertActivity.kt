@@ -405,7 +405,7 @@ class ReminderAlertActivity : Activity() {
             photo == null || !photo.isFile || photo.length() <= 0L -> Toast.makeText(this, "请先拍摄喝水自拍。", Toast.LENGTH_SHORT).show()
             else -> {
                 interactionHandled = true
-                if (!WaterCheckInStore.recordDrank(this, sessionId, amount, photo)) {
+                if (!WaterCheckInStore.recordDrank(this, sessionId, amount.toDouble(), photo)) {
                     interactionHandled = false
                     Toast.makeText(this, "本次记录未保存，可能已经处理过。", Toast.LENGTH_SHORT).show()
                     return

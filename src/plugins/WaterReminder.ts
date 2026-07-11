@@ -108,6 +108,11 @@ export interface WaterCheckInRecord {
   amountMl?: number
   photoFileName?: string
   consecutiveNotDrank?: number
+  entryMode?: 'volume' | 'container'
+  containerId?: string
+  containerName?: string
+  emptyWeightGrams?: number
+  totalWeightGrams?: number
 }
 
 export interface WaterCheckInHistory {
@@ -117,6 +122,18 @@ export interface WaterCheckInHistory {
   todayRecordCount: number
   lastDrankAt: number
   records: WaterCheckInRecord[]
+}
+
+export interface WaterContainer {
+  id: string
+  name: string
+  emptyWeightGrams: number
+}
+
+export interface LocalImagePayload {
+  sessionId: string
+  mimeType: string
+  dataBase64: string
 }
 
 export interface AlertResult {
@@ -154,7 +171,17 @@ export interface WaterReminderPlugin {
   useDefaultSound(payload?: ReminderTypePayload): Promise<ReminderStatus>
   getScreenState(): Promise<ScreenStateStatus>
   getScreenDashboardState(): Promise<ScreenDashboardState>
-  getWaterCheckInHistory(): Promise<WaterCheckInHistory>
+  getWaterCheckInHistory(payload?: { limit?: number }): Promise<WaterCheckInHistory>
+  getWaterContainers(): Promise<{ containers: WaterContainer[] }>
+  saveWaterContainer(payload: { id?: string; name: string; emptyWeightGrams: number }): Promise<{ containers: WaterContainer[] }>
+  deleteWaterContainer(payload: { id: string }): Promise<{ deleted: boolean; containers: WaterContainer[] }>
+  dismissWaterAlertUi(): Promise<void>
+  saveWaterDrankRecord(payload: LocalImagePayload & { amountMl: number; entryMode: 'volume' | 'container'; containerId?: string; containerName?: string; emptyWeightGrams?: number; totalWeightGrams?: number }): Promise<WaterCheckInHistory>
+  recordWaterNotDrank(payload: { sessionId: string }): Promise<{ accepted: boolean; consecutiveCount: number; requiresStatePhoto: boolean; retryMinutes: number }>
+  saveWaterStateCheck(payload: LocalImagePayload): Promise<WaterCheckInHistory>
+  getWaterPhoto(payload: { photoFileName: string }): Promise<{ mimeType: string; dataBase64: string }>
+  shareWaterDataExport(): Promise<{ opened: boolean; fileName: string }>
+  importWaterData(payload: { dataBase64: string }): Promise<{ history: WaterCheckInHistory; containers: WaterContainer[] }>
   requestNotificationPermission(): Promise<PermissionStatus>
   getPermissionStatus(): Promise<PermissionStatus>
   openExactAlarmSettings(): Promise<SettingsLaunchResult>

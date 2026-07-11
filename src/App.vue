@@ -2,10 +2,11 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { App as CapacitorApp } from '@capacitor/app'
 import type { PluginListenerHandle } from '@capacitor/core'
-import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType, type WaterCheckInHistory, type WaterCheckInRecord } from './plugins/WaterReminder'
+import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType, type WaterCheckInHistory, type WaterCheckInRecord, type WaterContainer } from './plugins/WaterReminder'
 
 type MainPage = 'water' | 'screen'
-type AppPage = MainPage | 'waterSettings' | 'screenSettings' | 'permissionGuide'
+type AppPage = MainPage | 'waterSettings' | 'screenSettings' | 'permissionGuide' | 'waterCheckIn' | 'waterHistory'
+type WaterAmountMode = 'volume' | 'container'
 type PermissionGuideKey = 'notifications' | 'exact' | 'overlay' | 'usage' | 'fullScreen' | 'waterNotification' | 'screenNotification' | 'deviceAdmin' | 'battery' | 'miuiPermissions' | 'miuiAutostart'
 type PermissionGuidePhase = 'idle' | 'refreshing' | 'ready' | 'launching' | 'waitingReturn' | 'reviewing' | 'complete'
 interface PermissionGuideItem { key: PermissionGuideKey; title: string; purpose: string; status: PermissionValue; applicable: boolean; required: boolean; actionLabel?: string; details?: string }
@@ -19,6 +20,8 @@ interface State {
   screenState: ScreenStateStatus | null
   screenDataStale: boolean
   waterHistory: WaterCheckInHistory
+  waterContainers: WaterContainer[]
+  waterHistoryImages: Record<string, string>
   now: number
   nextReminderInput: string
   activePage: AppPage
@@ -69,6 +72,8 @@ const state = reactive<State>({
   screenState: null,
   screenDataStale: false,
   waterHistory: { consecutiveNotDrank: 0, requiresStatePhoto: false, todayTotalMl: 0, todayRecordCount: 0, lastDrankAt: 0, records: [] },
+  waterContainers: [],
+  waterHistoryImages: {},
   now: Date.now(),
   nextReminderInput: '',
   activePage: 'water',
@@ -83,10 +88,25 @@ const state = reactive<State>({
   status: { ...defaultStatus },
 })
 
+const waterCheckIn = reactive({
+  sessionId: '',
+  isTest: false,
+  action: 'prompt' as 'prompt' | 'drank' | 'forced_state',
+  amountMode: 'volume' as WaterAmountMode,
+  directMl: null as number | null,
+  totalWeightGrams: null as number | null,
+  containerId: '',
+  photoName: '',
+  photoMimeType: '',
+  photoBase64: '',
+  submitting: false,
+  message: '',
+})
+
 const isEnabledText = computed(() => state.status.enabled ? '喝水提醒已开启' : '喝水提醒已关闭')
 const screenLimitText = computed(() => state.status.screenLimitEnabled ? '屏幕超时提醒已开启' : '屏幕超时提醒已关闭')
 const screenLimitShortText = computed(() => state.status.screenLimitEnabled ? '已开启' : '已关闭')
-const pageTitle = computed(() => ({ water: '喝水提醒', screen: '屏幕记录', waterSettings: '喝水提醒设置', screenSettings: '屏幕记录设置', permissionGuide: '权限配置' }[state.activePage]))
+const pageTitle = computed(() => ({ water: '喝水提醒', screen: '屏幕记录', waterSettings: '喝水提醒设置', screenSettings: '屏幕记录设置', permissionGuide: '权限配置', waterCheckIn: '喝水确认', waterHistory: '喝水历史' }[state.activePage]))
 const nextReminderText = computed(() => formatNextReminder(state.status.nextReminderTime))
 const timeRangeText = computed(() => `${pad(state.status.startHour)}:${pad(state.status.startMinute)} - ${pad(state.status.endHour)}:${pad(state.status.endMinute)}`)
 const waterSoundModeText = computed(() => soundModeText(state.status.waterSoundMode, state.status.waterCustomSoundName))
@@ -106,6 +126,13 @@ const latestWaterRecord = computed(() => state.waterHistory.records[0])
 const todayWaterAverageMl = computed(() => state.waterHistory.todayRecordCount > 0 ? Math.round(state.waterHistory.todayTotalMl / state.waterHistory.todayRecordCount) : 0)
 const todayWaterDateText = computed(() => new Date(state.now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }))
 const lastDrankTimeText = computed(() => state.waterHistory.lastDrankAt ? new Date(state.waterHistory.lastDrankAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '暂无')
+const selectedWaterContainer = computed(() => state.waterContainers.find(item => item.id === waterCheckIn.containerId) || state.waterContainers[0])
+const calculatedWaterMl = computed(() => {
+  const total = Number(waterCheckIn.totalWeightGrams)
+  const empty = Number(selectedWaterContainer.value?.emptyWeightGrams)
+  if (!Number.isFinite(total) || !Number.isFinite(empty)) return 0
+  return Math.max(0, Math.round((total - empty) * 10) / 10)
+})
 const cancelCycleText = computed(() => {
   if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
   if (screenCyclePhase.value === 'alerting') return '提醒中'
@@ -116,6 +143,7 @@ const cancelCycleText = computed(() => {
 })
 const isSettingsPage = computed(() => state.activePage === 'waterSettings' || state.activePage === 'screenSettings')
 const isPermissionGuidePage = computed(() => state.activePage === 'permissionGuide')
+const isWaterFlowPage = computed(() => state.activePage === 'waterCheckIn' || state.activePage === 'waterHistory')
 
 let ticker: number | undefined
 let screenRefreshTicker: number | undefined
@@ -152,7 +180,7 @@ function formatNextReminder(timestamp: number) {
 }
 function waterRecordText(record?: WaterCheckInRecord) {
   if (!record) return '暂无记录'
-  if (record.type === 'drank') return `已喝 ${record.amountMl || 0} 毫升（含自拍）`
+  if (record.type === 'drank') return `已喝 ${record.amountMl || 0} 毫升${record.entryMode === 'container' ? `（${record.containerName || '容器'}称重）` : ''}`
   if (record.type === 'state_check') return '已完成状态自拍验证'
   return `未喝（连续 ${record.consecutiveNotDrank || 1}/3 次）`
 }
@@ -219,6 +247,14 @@ function openSettings() {
   switchPage(source === 'screen' ? 'screenSettings' : 'waterSettings', true)
 }
 function navigateBack() {
+  if (isWaterFlowPage.value) {
+    if (state.activePage === 'waterCheckIn' && waterCheckIn.action === 'forced_state' && !waterCheckIn.isTest) {
+      waterCheckIn.message = '连续三次未喝后，需要先完成状态自拍验证。'
+      return
+    }
+    switchPage('water')
+    return
+  }
   if (isSettingsPage.value || isPermissionGuidePage.value) {
     if (history.state?.appPage === state.activePage) {
       history.back()
@@ -236,13 +272,13 @@ function handlePopState(event: PopStateEvent) {
   const page = event.state?.appPage as AppPage | undefined
   const source = event.state?.settingsSource as MainPage | undefined
   if (source === 'water' || source === 'screen') state.settingsSource = source
-  if (page === 'water' || page === 'screen' || page === 'waterSettings' || page === 'screenSettings' || page === 'permissionGuide') {
+  if (page === 'water' || page === 'screen' || page === 'waterSettings' || page === 'screenSettings' || page === 'permissionGuide' || page === 'waterCheckIn' || page === 'waterHistory') {
     state.activePage = page
     if (page === 'water' || page === 'screen') state.settingsSource = page
     scrollContentToTop()
     return
   }
-  if (isSettingsPage.value || isPermissionGuidePage.value) {
+  if (isSettingsPage.value || isPermissionGuidePage.value || isWaterFlowPage.value) {
     state.activePage = state.settingsSource
     history.replaceState({ appPage: state.settingsSource, settingsSource: state.settingsSource }, '', location.href)
     scrollContentToTop()
@@ -252,13 +288,13 @@ function isInteractiveTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('button,input,textarea,select,label,a,.file-picker'))
 }
 function onTouchStart(event: TouchEvent) {
-  if (isSettingsPage.value || isPermissionGuidePage.value || isInteractiveTarget(event.target) || event.touches.length !== 1) return
+  if (isSettingsPage.value || isPermissionGuidePage.value || isWaterFlowPage.value || isInteractiveTarget(event.target) || event.touches.length !== 1) return
   const touch = event.touches[0]
   if (touch.clientX < 24 || touch.clientX > window.innerWidth - 24) return
   touchStart.x = touch.clientX; touchStart.y = touch.clientY; touchStart.active = true
 }
 function onTouchEnd(event: TouchEvent) {
-  if (!touchStart.active || isSettingsPage.value || isPermissionGuidePage.value) return
+  if (!touchStart.active || isSettingsPage.value || isPermissionGuidePage.value || isWaterFlowPage.value) return
   touchStart.active = false
   const touch = event.changedTouches[0]
   const dx = touch.clientX - touchStart.x
@@ -327,14 +363,17 @@ function setUserMessage(message: string, durationMs = state.activePage === 'scre
 async function refreshStatus(showMessage = false) {
   state.loading = true
   try {
-    const [status, permissions, waterHistory] = await Promise.all([
+    const [status, permissions, waterHistory, containerResult] = await Promise.all([
       WaterReminder.getStatus(),
       WaterReminder.getPermissionStatus(),
       WaterReminder.getWaterCheckInHistory(),
+      WaterReminder.getWaterContainers(),
     ])
     state.status = { ...defaultStatus, ...status }
     state.permissions = permissions
     state.waterHistory = waterHistory
+    state.waterContainers = containerResult.containers
+    if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
     updateNextReminderInput()
     await refreshScreenDashboard(false)
     if (showMessage) setUserMessage('状态已更新')
@@ -491,14 +530,165 @@ async function importCustomSound(type: ReminderType, event: Event) {
 }
 function isSupportedAudioFile(file: File) { return file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) }
 function inferAudioMimeType(fileName: string) { return ({ mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[fileName.split('.').pop()?.toLowerCase() || ''] || 'audio/mpeg' }
-function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '').split(',').pop() || ''); reader.onerror = () => reject(new Error('读取音频文件失败')); reader.readAsDataURL(file) }) }
+function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '').split(',').pop() || ''); reader.onerror = () => reject(new Error('读取文件失败')); reader.readAsDataURL(file) }) }
+function resetWaterCheckIn(sessionId = '', isTest = false, action: 'prompt' | 'drank' | 'forced_state' = 'prompt') {
+  waterCheckIn.sessionId = sessionId
+  waterCheckIn.isTest = isTest
+  waterCheckIn.action = action
+  waterCheckIn.amountMode = 'volume'
+  waterCheckIn.directMl = null
+  waterCheckIn.totalWeightGrams = null
+  waterCheckIn.photoName = ''
+  waterCheckIn.photoMimeType = ''
+  waterCheckIn.photoBase64 = ''
+  waterCheckIn.message = ''
+  waterCheckIn.submitting = false
+  if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
+}
+async function openWaterCheckInPage(sessionId: string, isTest: boolean, action: 'prompt' | 'drank' | 'forced_state') {
+  if (!state.waterContainers.length) {
+    const result = await WaterReminder.getWaterContainers()
+    state.waterContainers = result.containers
+  }
+  const waterHistory = await WaterReminder.getWaterCheckInHistory()
+  state.waterHistory = waterHistory
+  resetWaterCheckIn(sessionId, isTest, waterHistory.requiresStatePhoto ? 'forced_state' : action)
+  state.activePage = 'waterCheckIn'
+  state.settingsSource = 'water'
+  window.history.replaceState({ appPage: 'waterCheckIn', settingsSource: 'water' }, '', location.href)
+  await WaterReminder.dismissWaterAlertUi().catch(() => undefined)
+  scrollContentToTop()
+}
+async function handleWaterPhoto(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) { waterCheckIn.message = '请选择图片文件'; input.value = ''; return }
+  if (file.size > 20 * 1024 * 1024) { waterCheckIn.message = '图片不能超过 20MB'; input.value = ''; return }
+  waterCheckIn.photoName = file.name
+  waterCheckIn.photoMimeType = file.type || 'image/jpeg'
+  waterCheckIn.photoBase64 = await fileToBase64(file)
+  waterCheckIn.message = '自拍已选择，将在提交后保存到本机。'
+}
+async function submitWaterDrank() {
+  if (waterCheckIn.submitting) return
+  const amount = waterCheckIn.amountMode === 'container' ? calculatedWaterMl.value : Number(waterCheckIn.directMl)
+  if (!Number.isFinite(amount) || amount < 1 || amount > 5000) { waterCheckIn.message = '饮水量必须在 1-5000 毫升之间'; return }
+  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择喝水自拍'; return }
+  if (waterCheckIn.isTest) { waterCheckIn.message = `测试完成：${amount} 毫升，不保存记录`; window.setTimeout(() => switchPage('water'), 900); return }
+  waterCheckIn.submitting = true
+  try {
+    state.waterHistory = await WaterReminder.saveWaterDrankRecord({
+      sessionId: waterCheckIn.sessionId,
+      amountMl: amount,
+      entryMode: waterCheckIn.amountMode,
+      containerId: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.id : undefined,
+      containerName: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.name : undefined,
+      emptyWeightGrams: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.emptyWeightGrams : undefined,
+      totalWeightGrams: waterCheckIn.amountMode === 'container' ? Number(waterCheckIn.totalWeightGrams) : undefined,
+      mimeType: waterCheckIn.photoMimeType,
+      dataBase64: waterCheckIn.photoBase64,
+    })
+    state.message = `已保存本次饮水 ${amount} 毫升及自拍`
+    switchPage('water')
+  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存喝水记录失败' }
+  finally { waterCheckIn.submitting = false }
+}
+async function submitWaterNotDrank() {
+  if (waterCheckIn.submitting) return
+  if (waterCheckIn.isTest) { waterCheckIn.message = '测试完成，不保存未喝记录'; window.setTimeout(() => switchPage('water'), 900); return }
+  waterCheckIn.submitting = true
+  try {
+    const result = await WaterReminder.recordWaterNotDrank({ sessionId: waterCheckIn.sessionId })
+    if (result.requiresStatePhoto) {
+      waterCheckIn.action = 'forced_state'
+      waterCheckIn.photoBase64 = ''
+      waterCheckIn.photoName = ''
+      waterCheckIn.message = '已连续三次未喝，请完成状态自拍验证。'
+    } else {
+      state.message = `将在 ${result.retryMinutes} 分钟后再次提醒`
+      await refreshStatus()
+      switchPage('water')
+    }
+  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '处理未喝失败' }
+  finally { waterCheckIn.submitting = false }
+}
+async function submitWaterStateCheck() {
+  if (waterCheckIn.submitting) return
+  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择状态自拍'; return }
+  waterCheckIn.submitting = true
+  try {
+    state.waterHistory = await WaterReminder.saveWaterStateCheck({ sessionId: waterCheckIn.sessionId, mimeType: waterCheckIn.photoMimeType, dataBase64: waterCheckIn.photoBase64 })
+    state.message = `状态验证已保存在本机，将在 ${state.status.waterRetryMinutes} 分钟后再次提醒`
+    switchPage('water')
+  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存状态验证失败' }
+  finally { waterCheckIn.submitting = false }
+}
+async function openWaterHistory() {
+  state.waterHistory = await WaterReminder.getWaterCheckInHistory({ limit: 100 })
+  switchPage('waterHistory', true)
+}
+async function toggleWaterHistoryPhoto(record: WaterCheckInRecord) {
+  if (!record.photoFileName) return
+  if (state.waterHistoryImages[record.id]) { delete state.waterHistoryImages[record.id]; return }
+  try {
+    const photo = await WaterReminder.getWaterPhoto({ photoFileName: record.photoFileName })
+    state.waterHistoryImages[record.id] = `data:${photo.mimeType};base64,${photo.dataBase64}`
+  } catch (error) { state.message = error instanceof Error ? error.message : '读取本地自拍失败' }
+}
+function addWaterContainer() { state.waterContainers.push({ id: '', name: '新容器', emptyWeightGrams: 0 }) }
+async function saveWaterContainer(item: WaterContainer) {
+  try {
+    const result = await WaterReminder.saveWaterContainer({ id: item.id || undefined, name: item.name, emptyWeightGrams: Number(item.emptyWeightGrams) })
+    state.waterContainers = result.containers
+    state.message = '饮水容器已保存'
+  } catch (error) { state.message = error instanceof Error ? error.message : '保存容器失败' }
+}
+async function deleteWaterContainer(item: WaterContainer) {
+  if (!item.id) { state.waterContainers.splice(state.waterContainers.indexOf(item), 1); return }
+  const result = await WaterReminder.deleteWaterContainer({ id: item.id })
+  state.waterContainers = result.containers
+  if (!result.deleted) state.message = '至少需要保留一个饮水容器'
+}
+async function exportWaterData() {
+  try {
+    const result = await WaterReminder.shareWaterDataExport()
+    state.message = result.opened ? '已打开系统分享面板，请保存迁移档案' : '未能打开导出面板'
+  } catch (error) { state.message = error instanceof Error ? error.message : '导出喝水数据失败' }
+}
+async function importWaterData(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (file.size > 180 * 1024 * 1024) { state.message = '迁移档案不能超过 180MB'; input.value = ''; return }
+  if (!window.confirm('导入会替换当前的饮水容器与喝水历史，确定继续吗？')) { input.value = ''; return }
+  state.loading = true
+  try {
+    const result = await WaterReminder.importWaterData({ dataBase64: await fileToBase64(file) })
+    state.waterHistory = result.history
+    state.waterContainers = result.containers
+    state.waterHistoryImages = {}
+    state.message = `已导入 ${result.history.records.length} 条喝水记录`
+  } catch (error) { state.message = error instanceof Error ? error.message : '导入喝水数据失败' }
+  finally { state.loading = false; input.value = '' }
+}
 function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); if (state.permissionGuidePhase === 'waitingReturn' && !state.permissionGuideDidLeaveApp && Date.now() - state.permissionGuideLastOpenedAt > 1200) reviewPermissionReturn('web'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() } }
 function handleAppStateChange(isActive: boolean) { if (!isActive) { if (state.permissionGuidePhase === 'waitingReturn') state.permissionGuideDidLeaveApp = true; return } if (state.permissionGuidePhase === 'waitingReturn' && state.permissionGuideDidLeaveApp) reviewPermissionReturn('native'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() }
 function handleAppLaunchUrl(url?: string) {
   if (!url) return
   try {
-    const target = new URL(url).pathname.replace(/^\//, '')
+    const parsed = new URL(url)
+    const target = parsed.pathname.replace(/^\//, '')
     if (target === 'water' || target === 'screen') switchPage(target)
+    if (target === 'water-history') void openWaterHistory()
+    if (target === 'water-checkin') {
+      const action = parsed.searchParams.get('action')
+      void openWaterCheckInPage(
+        parsed.searchParams.get('sessionId') || '',
+        parsed.searchParams.get('isTest') === 'true',
+        action === 'drank' || action === 'forced_state' ? action : 'prompt',
+      )
+    }
   } catch { /* Ignore unrelated or malformed launch URLs. */ }
 }
 
@@ -540,7 +730,7 @@ onUnmounted(() => {
         <p class="eyebrow">水息守护</p>
         <h1>{{ pageTitle }}</h1>
       </div>
-      <button v-if="isSettingsPage || isPermissionGuidePage" class="icon-button" aria-label="返回" @click="closeSettings">←</button>
+      <button v-if="isSettingsPage || isPermissionGuidePage || isWaterFlowPage" class="icon-button" aria-label="返回" @click="closeSettings">←</button>
       <button v-else class="icon-button" aria-label="打开设置" @click="openSettings">⚙</button>
     </header>
 
@@ -580,6 +770,8 @@ onUnmounted(() => {
         <section class="actions compact-actions">
           <button :disabled="state.loading || state.saving" @click="enableReminder">开启提醒</button>
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableReminder">关闭提醒</button>
+          <button class="ghost" :disabled="state.loading || state.saving" @click="openWaterCheckInPage(`manual-${Date.now()}`, false, 'drank')">记录喝水</button>
+          <button class="ghost" :disabled="state.loading" @click="openWaterHistory">喝水历史</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshStatus(true)">刷新状态</button>
         </section>
@@ -612,6 +804,65 @@ onUnmounted(() => {
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableScreenLimit">关闭屏幕提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshScreenDashboard(true)">刷新屏幕记录</button>
+        </section>
+      </template>
+
+      <template v-else-if="state.activePage === 'waterCheckIn'">
+        <section class="card check-in-hero" :class="{ urgent: waterCheckIn.action === 'forced_state' }">
+          <span class="check-in-icon">{{ waterCheckIn.action === 'forced_state' ? '🛟' : '💧' }}</span>
+          <div>
+            <h2>{{ waterCheckIn.action === 'forced_state' ? '请先确认当前状态' : waterCheckIn.action === 'drank' ? '记录这次喝水' : '这次喝水了吗？' }}</h2>
+            <p>{{ waterCheckIn.action === 'forced_state' ? '你已连续三次选择未喝。请上传一张当前状态自拍，照片只保存在本机。' : '提醒已进入应用内处理；关闭本页不会截断独立播放的提示音。' }}</p>
+          </div>
+        </section>
+
+        <section v-if="waterCheckIn.action === 'prompt'" class="card check-in-choice">
+          <button @click="waterCheckIn.action = 'drank'">已喝</button>
+          <button class="secondary" :disabled="waterCheckIn.submitting" @click="submitWaterNotDrank">未喝，稍后提醒</button>
+          <small>选择“未喝”后，将在 {{ state.status.waterRetryMinutes }} 分钟后继续提醒；连续三次未喝需要状态自拍。</small>
+        </section>
+
+        <section v-else-if="waterCheckIn.action === 'drank'" class="card form-card check-in-form">
+          <h2>本次饮水量</h2>
+          <div class="mode-switch" role="tablist" aria-label="饮水量录入方式">
+            <button :class="{ active: waterCheckIn.amountMode === 'volume' }" @click="waterCheckIn.amountMode = 'volume'">直接输入容量</button>
+            <button :class="{ active: waterCheckIn.amountMode === 'container' }" @click="waterCheckIn.amountMode = 'container'">容器称重换算</button>
+          </div>
+          <label v-if="waterCheckIn.amountMode === 'volume'">喝水量（毫升）<input v-model.number="waterCheckIn.directMl" type="number" min="1" max="5000" step="1" inputmode="decimal" placeholder="例如 300" /></label>
+          <template v-else>
+            <label>饮水容器<select v-model="waterCheckIn.containerId"><option v-for="item in state.waterContainers" :key="item.id" :value="item.id">{{ item.name }} · 空重 {{ item.emptyWeightGrams }}g</option></select></label>
+            <label>容器加水总重量（克）<input v-model.number="waterCheckIn.totalWeightGrams" type="number" min="0" max="105000" step="0.1" inputmode="decimal" placeholder="放上秤后输入总重量" /></label>
+            <div class="calculation-card"><span>自动换算</span><strong>{{ calculatedWaterMl }} ml</strong><small>总重量 {{ Number(waterCheckIn.totalWeightGrams || 0) }}g − 空容器 {{ selectedWaterContainer?.emptyWeightGrams || 0 }}g；按 1g 水≈1ml 计算</small></div>
+          </template>
+          <label class="photo-picker">喝水自拍（仅本机保存）<input type="file" accept="image/*" capture="user" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '拍照或选择图片' }}</span></label>
+          <p v-if="waterCheckIn.message" class="inline-message">{{ waterCheckIn.message }}</p>
+          <div class="actions"><button :disabled="waterCheckIn.submitting" @click="submitWaterDrank">{{ waterCheckIn.submitting ? '正在保存…' : '保存本次记录' }}</button><button class="ghost" @click="waterCheckIn.action = 'prompt'">返回选择</button></div>
+        </section>
+
+        <section v-else class="card form-card state-check-card">
+          <h2>状态自拍验证</h2>
+          <p>照片只写入应用本地目录，不会上传网络。完成后会重新安排稍后提醒。</p>
+          <label class="photo-picker urgent-picker">当前状态自拍<input type="file" accept="image/*" capture="user" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '立即拍摄或选择图片' }}</span></label>
+          <p v-if="waterCheckIn.message" class="inline-message warning">{{ waterCheckIn.message }}</p>
+          <button class="full-button" :disabled="waterCheckIn.submitting" @click="submitWaterStateCheck">{{ waterCheckIn.submitting ? '正在保存…' : '完成验证' }}</button>
+        </section>
+      </template>
+
+      <template v-else-if="state.activePage === 'waterHistory'">
+        <section class="history-summary">
+          <div><span>今日饮水</span><strong>{{ state.waterHistory.todayTotalMl.toLocaleString('zh-CN') }} ml</strong></div>
+          <div><span>今日次数</span><strong>{{ state.waterHistory.todayRecordCount }} 次</strong></div>
+        </section>
+        <section v-if="!state.waterHistory.records.length" class="card empty-history"><span>💧</span><h2>还没有喝水记录</h2><p>完成一次“已喝”验证后，记录和自拍会显示在这里。</p></section>
+        <section v-else class="history-list">
+          <article v-for="record in state.waterHistory.records" :key="record.id" class="history-item">
+            <div class="history-marker" :class="record.type">{{ record.type === 'drank' ? '💧' : record.type === 'state_check' ? '📷' : '⏳' }}</div>
+            <div class="history-content">
+              <div><strong>{{ waterRecordText(record) }}</strong><time>{{ formatTimestamp(record.timestamp) }}</time></div>
+              <button v-if="record.photoFileName" class="ghost mini-button" @click="toggleWaterHistoryPhoto(record)">{{ state.waterHistoryImages[record.id] ? '收起图片' : '查看本地图片' }}</button>
+              <img v-if="state.waterHistoryImages[record.id]" :src="state.waterHistoryImages[record.id]" alt="喝水记录本地自拍" loading="lazy" />
+            </div>
+          </article>
         </section>
       </template>
 
@@ -651,6 +902,20 @@ onUnmounted(() => {
           </div>
           <label>通知标题<input v-model="state.status.waterNotificationTitle" type="text" /></label>
           <label>通知内容<textarea v-model="state.status.waterNotificationText" rows="3" /></label>
+        </section>
+        <section class="card form-card container-settings">
+          <div class="section-heading"><div><h2>饮水容器</h2><p>称重录入时，用“容器加水总重量 − 空容器重量”换算饮水毫升数。</p></div><button class="ghost mini-button" @click="addWaterContainer">添加容器</button></div>
+          <div v-for="item in state.waterContainers" :key="item.id || `draft-${state.waterContainers.indexOf(item)}`" class="container-row">
+            <label>容器名称<input v-model="item.name" type="text" maxlength="30" /></label>
+            <label>空容器重量（克）<input v-model.number="item.emptyWeightGrams" type="number" min="0.1" max="100000" step="0.1" inputmode="decimal" /></label>
+            <div><button class="ghost" @click="saveWaterContainer(item)">保存</button><button class="danger-ghost" @click="deleteWaterContainer(item)">删除</button></div>
+          </div>
+          <p class="sound-note">已预置“常用水杯 241.5g”。容器使用稳定 ID 存储，修改应用包名时可随饮水数据一起迁移。</p>
+          <div class="data-transfer">
+            <button class="ghost" :disabled="state.loading" @click="exportWaterData">导出数据与照片</button>
+            <label class="file-picker">导入迁移档案<input type="file" accept="application/zip,.zip,.waterdata" :disabled="state.loading" @change="importWaterData" /></label>
+          </div>
+          <p class="sound-note">迁移档案采用与包名无关的版本化格式，包含容器、历史记录和本地图片；导入前不会读取绝对文件路径。</p>
         </section>
         <section class="card form-card">
           <h2>喝水提醒铃声</h2>
@@ -692,7 +957,7 @@ onUnmounted(() => {
       <p v-if="isSettingsPage" class="hint">如使用 MIUI/HyperOS，请在权限配置中允许通知、自启动、锁屏显示与不限制省电。</p>
     </main>
 
-    <nav v-if="!isSettingsPage && !isPermissionGuidePage" class="bottom-tabs" aria-label="主功能切换">
+    <nav v-if="!isSettingsPage && !isPermissionGuidePage && !isWaterFlowPage" class="bottom-tabs" aria-label="主功能切换">
       <button :class="{ active: state.activePage === 'water' || state.activePage === 'waterSettings' }" @click="switchPage('water')">💧<span>喝水提醒</span></button>
       <button :class="{ active: state.activePage === 'screen' || state.activePage === 'screenSettings' }" @click="switchPage('screen')">📱<span>屏幕记录</span></button>
     </nav>
