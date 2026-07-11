@@ -57,8 +57,8 @@ input, textarea, select { width:100%; margin-top:8px; border:1px solid #c9e2ec; 
 input:focus, textarea:focus, select:focus { border-color:#16a3d2; box-shadow:0 0 0 4px rgba(22,163,210,.14); }
 .field-note { display:block; margin-top:6px; color:#6a8292; font-size:.78rem; font-weight:500; }
 .sound-options { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; align-items:stretch; }
-.file-picker { display:flex; align-items:center; justify-content:center; min-height:54px; margin:0; border:1px solid #bfdeea; border-radius:18px; color:#166985; background:white; text-align:center; cursor:pointer; }
-.file-picker input { position:absolute; inline-size:1px; block-size:1px; opacity:0; pointer-events:none; }
+.file-picker { position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; min-height:54px; margin:0; border:1px solid #bfdeea; border-radius:18px; color:#166985; background:white; text-align:center; cursor:pointer; }
+.file-picker input { position:absolute; inset:0; inline-size:100%; block-size:100%; margin:0; opacity:0; cursor:pointer; }
 .sound-note { margin:12px 0 0; color:#557083; font-size:.92rem; }
 .actions { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; margin:20px 0; }
 button { border:0; border-radius:18px; padding:15px 18px; color:white; background:linear-gradient(135deg,#0ea5e9,#14b8a6); font-weight:900; box-shadow:0 14px 28px rgba(14,165,233,.2); }
@@ -171,6 +171,14 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 
 /* Unified compact dashboards. */
 .app-content.main-dashboard { padding-top:10px; padding-bottom:10px; }
+.app-content.water-dashboard-page { overflow-y:hidden; overscroll-behavior:none; -webkit-overflow-scrolling:auto; }
+.water-dashboard-layout { display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:8px; height:100%; min-height:0; }
+.water-dashboard-layout > * { min-height:0; margin:0; }
+.water-dashboard-overview { display:flex; flex-direction:column; overflow:hidden; }
+.water-dashboard-overview .summary-grid { flex:1; min-height:0; grid-template-rows:repeat(4,minmax(0,1fr)); }
+.water-dashboard-overview .summary-grid > div { display:flex; min-height:0; flex-direction:column; justify-content:center; }
+.water-dashboard-overview .summary-grid > div:last-child { grid-column:1/-1; }
+.water-dashboard-actions { align-self:end; margin:0; }
 .compact-dashboard-card { padding:14px; margin-bottom:10px; }
 .dashboard-card-title { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; min-width:0; }
 .dashboard-card-title h2 { margin:0; min-width:0; flex:0 1 auto; white-space:nowrap; font-size:1.22rem; line-height:1.15; }
@@ -209,6 +217,33 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .water-today-stats span { display:block; margin-bottom:3px; color:rgba(255,255,255,.72); font-size:.72rem; }
 .water-today-stats strong { display:block; overflow:hidden; color:white; font-size:.88rem; text-overflow:ellipsis; white-space:nowrap; }
 .today-water-card > p { margin:12px 0 0; color:rgba(255,255,255,.82); font-size:.78rem; line-height:1.4; }
+
+@media (max-height:780px) {
+  .app-content.water-dashboard-page { padding-top:6px; padding-bottom:6px; }
+  .water-dashboard-layout { gap:6px; }
+  .water-dashboard-page .today-water-card { padding:10px 12px; border-radius:17px; }
+  .water-dashboard-page .water-drop { width:34px; height:34px; border-radius:11px; font-size:1rem; }
+  .water-dashboard-page .water-total { margin:4px 0 7px; }
+  .water-dashboard-page .water-total strong { font-size:2.15rem; }
+  .water-dashboard-page .water-today-stats div { padding:5px 7px; border-radius:10px; }
+  .water-dashboard-page .today-water-card > p, .water-dashboard-page .dashboard-note { display:none; }
+  .water-dashboard-page .water-dashboard-overview { padding:8px; }
+  .water-dashboard-page .dashboard-card-title { margin-bottom:5px; }
+  .water-dashboard-page .compact-dashboard-card .summary-grid { gap:4px; }
+  .water-dashboard-page .compact-dashboard-card .summary-grid div { padding:4px 7px; }
+  .water-dashboard-page .compact-actions { gap:5px; }
+  .water-dashboard-page .compact-actions button { min-height:38px; padding:6px; font-size:.82rem; }
+}
+
+@media (max-height:650px) {
+  .water-dashboard-page .water-card-heading small { display:none; }
+  .water-dashboard-page .water-drop { width:30px; height:30px; }
+  .water-dashboard-page .water-total strong { font-size:1.85rem; }
+  .water-dashboard-page .water-today-stats span { margin-bottom:1px; font-size:.64rem; }
+  .water-dashboard-page .compact-dashboard-card .summary-grid span { margin-bottom:1px; font-size:.62rem; }
+  .water-dashboard-page .compact-dashboard-card .summary-grid strong { font-size:.72rem; }
+  .water-dashboard-page .compact-actions button { min-height:34px; padding:4px; font-size:.76rem; }
+}
 
 @media (max-width:640px) {
   .today-water-card { padding:14px 15px; border-radius:19px; }
@@ -263,7 +298,8 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .calculation-card strong { color:#0f766e; font-size:1.45rem; }
 .calculation-card small { grid-column:1/-1; color:#6a8292; line-height:1.45; }
 .photo-picker { position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:66px; padding:14px 16px; border:1px dashed #38bdf8; border-radius:18px; background:#f0f9ff; cursor:pointer; }
-.photo-picker input { position:absolute; inline-size:1px; block-size:1px; opacity:0; pointer-events:none; }
+.photo-picker { overflow:hidden; }
+.photo-picker input { position:absolute; inset:0; inline-size:100%; block-size:100%; margin:0; opacity:0; cursor:pointer; }
 .photo-picker span { color:#0284c7; font-weight:900; text-align:right; overflow-wrap:anywhere; }
 .urgent-picker { border-color:#fb923c; background:#fff7ed; }
 .urgent-picker span { color:#c2410c; }

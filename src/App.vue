@@ -188,8 +188,18 @@ let appUpdateHandle: PluginListenerHandle | undefined
 let updateCheckTimer: number | undefined
 let messageTimer: number | undefined
 let autoSaveTimer: number | undefined
+let resumeTimer: number | undefined
+let filePickerRecoveryTimer: number | undefined
 let lastSavedConfigSignature = ''
 let screenDashboardRefresh: Promise<void> | null = null
+let statusRefresh: Promise<void> | null = null
+let filePickerRestore: Promise<void> | null = null
+let resumeFromNative = false
+let filePickerActive = false
+let filePickerProcessing = false
+let filePickerSettledAt = 0
+let filePickerScrollTop = 0
+let filePickerPage: AppPage = 'water'
 let waterSummaryDayKey = new Date().toDateString()
 const contentScroller = ref<HTMLElement | null>(null)
 const touchStart = reactive({ x: 0, y: 0, active: false })
@@ -427,27 +437,38 @@ function setUserMessage(message: string, durationMs = state.activePage === 'scre
 }
 
 async function refreshStatus(showMessage = false) {
-  state.loading = true
-  try {
-    const [status, permissions, waterHistory, containerResult] = await Promise.all([
-      WaterReminder.getStatus(),
-      WaterReminder.getPermissionStatus(),
-      WaterReminder.getWaterCheckInHistory(),
-      WaterReminder.getWaterContainers(),
-    ])
-    state.status = { ...defaultStatus, ...status }
-    state.permissions = permissions
-    state.waterHistory = waterHistory
-    state.waterContainers = containerResult.containers
-    if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
-    updateNextReminderInput()
-    lastSavedConfigSignature = configSignature(buildConfig())
-    await refreshScreenDashboard(false)
+  if (statusRefresh) {
+    await statusRefresh
     if (showMessage) setUserMessage('状态已更新')
-  } catch (error) {
-    if (state.activePage === 'screen') state.screenDataStale = true
-    setUserMessage(error instanceof Error ? error.message : '读取状态失败', 4000)
-  } finally { state.loading = false }
+    return
+  }
+  state.loading = true
+  statusRefresh = (async () => {
+    try {
+      const [status, permissions, waterHistory, containerResult] = await Promise.all([
+        WaterReminder.getStatus(),
+        WaterReminder.getPermissionStatus(),
+        WaterReminder.getWaterCheckInHistory(),
+        WaterReminder.getWaterContainers(),
+      ])
+      state.status = { ...defaultStatus, ...status }
+      state.permissions = permissions
+      state.waterHistory = waterHistory
+      state.waterContainers = containerResult.containers
+      if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
+      updateNextReminderInput()
+      lastSavedConfigSignature = configSignature(buildConfig())
+      await refreshScreenDashboard(false)
+      if (showMessage) setUserMessage('状态已更新')
+    } catch (error) {
+      if (state.activePage === 'screen') state.screenDataStale = true
+      setUserMessage(error instanceof Error ? error.message : '读取状态失败', 4000)
+    } finally {
+      state.loading = false
+      statusRefresh = null
+    }
+  })()
+  await statusRefresh
 }
 async function saveConfig(message: string, overrides: Partial<ReminderConfig> = {}, requestPermission = true, skipUnchanged = false) {
   state.saving = true
@@ -593,16 +614,52 @@ async function setSoundMode(type: ReminderType, mode: ReminderSoundMode) {
     if (!state.message.startsWith('请先')) state.message = '已切换提示音'
   } catch (error) { state.message = error instanceof Error ? error.message : '切换提示音失败' } finally { state.saving = false }
 }
+function nextPaint() { return new Promise<void>(resolve => window.requestAnimationFrame(() => resolve())) }
+function beginFilePicker() {
+  if (filePickerRecoveryTimer) window.clearTimeout(filePickerRecoveryTimer)
+  filePickerActive = true
+  filePickerProcessing = false
+  filePickerPage = state.activePage
+  filePickerScrollTop = contentScroller.value?.scrollTop ?? 0
+}
+async function finishFilePicker() {
+  if (filePickerRestore) return filePickerRestore
+  filePickerRestore = (async () => {
+    if (filePickerRecoveryTimer) window.clearTimeout(filePickerRecoveryTimer)
+    filePickerActive = false
+    await nextTick()
+    await nextPaint()
+    await nextPaint()
+    const scroller = contentScroller.value
+    if (scroller && state.activePage === filePickerPage) {
+      const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+      scroller.scrollTop = Math.min(filePickerScrollTop, maximum)
+      // Reading the final bounds invalidates Android WebView's stale scroll layer.
+      scroller.getBoundingClientRect()
+    }
+    filePickerSettledAt = Date.now()
+  })().finally(() => { filePickerRestore = null })
+  return filePickerRestore
+}
+function scheduleFilePickerRecovery() {
+  if (filePickerRecoveryTimer) window.clearTimeout(filePickerRecoveryTimer)
+  filePickerRecoveryTimer = window.setTimeout(() => {
+    if (filePickerProcessing) { scheduleFilePickerRecovery(); return }
+    void finishFilePicker()
+  }, 450)
+}
 async function importCustomSound(type: ReminderType, event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
-  if (!isSupportedAudioFile(file)) { state.message = '请选择常见音频格式文件'; input.value = ''; return }
+  if (!file) { await finishFilePicker(); return }
+  if (!isSupportedAudioFile(file)) { state.message = '请选择常见音频格式文件'; input.value = ''; await finishFilePicker(); return }
+  filePickerProcessing = true
   state.importingSound = type
   try {
     state.status = { ...defaultStatus, ...await WaterReminder.saveCustomSound({ type, fileName: file.name, mimeType: file.type || inferAudioMimeType(file.name), dataBase64: await fileToBase64(file) }) }
     state.message = `已导入自定义提示音：${file.name}`
-  } catch (error) { state.message = error instanceof Error ? error.message : '导入提示音失败' } finally { state.importingSound = ''; input.value = '' }
+  } catch (error) { state.message = error instanceof Error ? error.message : '导入提示音失败' }
+  finally { state.importingSound = ''; filePickerProcessing = false; input.value = ''; await finishFilePicker() }
 }
 function isSupportedAudioFile(file: File) { return file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) }
 function inferAudioMimeType(fileName: string) { return ({ mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[fileName.split('.').pop()?.toLowerCase() || ''] || 'audio/mpeg' }
@@ -640,13 +697,17 @@ async function openWaterCheckInPage(sessionId: string, isTest: boolean, action: 
 async function handleWaterPhoto(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
-  if (!file.type.startsWith('image/')) { waterCheckIn.message = '请选择图片文件'; input.value = ''; return }
-  if (file.size > 20 * 1024 * 1024) { waterCheckIn.message = '图片不能超过 20MB'; input.value = ''; return }
-  waterCheckIn.photoName = file.name
-  waterCheckIn.photoMimeType = file.type || 'image/jpeg'
-  waterCheckIn.photoBase64 = await fileToBase64(file)
-  waterCheckIn.message = '凭证照片已选择，将在提交后保存到本机。'
+  if (!file) { await finishFilePicker(); return }
+  if (!file.type.startsWith('image/')) { waterCheckIn.message = '请选择图片文件'; input.value = ''; await finishFilePicker(); return }
+  if (file.size > 20 * 1024 * 1024) { waterCheckIn.message = '图片不能超过 20MB'; input.value = ''; await finishFilePicker(); return }
+  filePickerProcessing = true
+  try {
+    waterCheckIn.photoName = file.name
+    waterCheckIn.photoMimeType = file.type || 'image/jpeg'
+    waterCheckIn.photoBase64 = await fileToBase64(file)
+    waterCheckIn.message = '凭证照片已选择，将在提交后保存到本机。'
+  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '读取图片失败' }
+  finally { filePickerProcessing = false; input.value = ''; await finishFilePicker() }
 }
 async function submitWaterDrank() {
   if (waterCheckIn.submitting) return
@@ -744,9 +805,10 @@ async function exportWaterData() {
 async function importWaterData(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
-  if (file.size > 180 * 1024 * 1024) { state.message = '迁移档案不能超过 180MB'; input.value = ''; return }
-  if (!window.confirm('导入会替换当前的饮水容器与喝水历史，确定继续吗？')) { input.value = ''; return }
+  if (!file) { await finishFilePicker(); return }
+  if (file.size > 180 * 1024 * 1024) { state.message = '迁移档案不能超过 180MB'; input.value = ''; await finishFilePicker(); return }
+  if (!window.confirm('导入会替换当前的饮水容器与喝水历史，确定继续吗？')) { input.value = ''; await finishFilePicker(); return }
+  filePickerProcessing = true
   state.loading = true
   try {
     const result = await WaterReminder.importWaterData({ dataBase64: await fileToBase64(file) })
@@ -755,7 +817,7 @@ async function importWaterData(event: Event) {
     state.waterHistoryImages = {}
     state.message = `已导入 ${result.history.records.length} 条喝水记录`
   } catch (error) { state.message = error instanceof Error ? error.message : '导入喝水数据失败' }
-  finally { state.loading = false; input.value = '' }
+  finally { state.loading = false; filePickerProcessing = false; input.value = ''; await finishFilePicker() }
 }
 function mergeUpdateState(next: UpdateState) {
   const previousLatest = appUpdate.latestVersionCode
@@ -824,16 +886,37 @@ function handleUpdateDownloadState(next: UpdateState) {
     setUserMessage(next.error || '更新下载失败', 5000)
   }
 }
-function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); if (state.permissionGuidePhase === 'waitingReturn' && !state.permissionGuideDidLeaveApp && Date.now() - state.permissionGuideLastOpenedAt > 1200) reviewPermissionReturn('web'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() } }
+function scheduleAppResume(source: 'native' | 'web') {
+  resumeFromNative ||= source === 'native'
+  if (resumeTimer) window.clearTimeout(resumeTimer)
+  resumeTimer = window.setTimeout(() => {
+    const effectiveSource = resumeFromNative ? 'native' : 'web'
+    resumeFromNative = false
+    void handleAppResume(effectiveSource)
+  }, 250)
+}
+async function handleAppResume(source: 'native' | 'web') {
+  state.now = Date.now()
+  if (retryInstallOnResume.value && appUpdate.status === 'downloaded') void installDownloadedUpdate()
+  if (filePickerActive) { scheduleFilePickerRecovery(); return }
+  // The input change handler already committed the selected file. Ignore the
+  // trailing visibility/app-state event so it cannot start a second redraw.
+  if (Date.now() - filePickerSettledAt < 1200) return
+  if (state.permissionGuidePhase === 'waitingReturn') {
+    if (state.permissionGuideDidLeaveApp) await reviewPermissionReturn('native')
+    else if (source === 'web' && Date.now() - state.permissionGuideLastOpenedAt > 1200) await reviewPermissionReturn('web')
+    return
+  }
+  if (state.activePage === 'screen') await refreshScreenDashboard(false)
+  else await refreshStatus()
+}
+function handleVisibilityChange() { if (document.visibilityState === 'visible') scheduleAppResume('web') }
 function handleAppStateChange(isActive: boolean) {
   if (!isActive) {
     if (state.permissionGuidePhase === 'waitingReturn') state.permissionGuideDidLeaveApp = true
     return
   }
-  if (retryInstallOnResume.value && appUpdate.status === 'downloaded') void installDownloadedUpdate()
-  if (state.permissionGuidePhase === 'waitingReturn' && state.permissionGuideDidLeaveApp) reviewPermissionReturn('native')
-  else if (state.activePage === 'screen') refreshScreenDashboard(false)
-  else refreshStatus()
+  scheduleAppResume('native')
 }
 function handleAppLaunchUrl(url?: string) {
   if (!url) return
@@ -887,6 +970,8 @@ onUnmounted(() => {
   if (updateCheckTimer) window.clearTimeout(updateCheckTimer)
   if (messageTimer) window.clearTimeout(messageTimer)
   if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
+  if (resumeTimer) window.clearTimeout(resumeTimer)
+  if (filePickerRecoveryTimer) window.clearTimeout(filePickerRecoveryTimer)
 })
 </script>
 
@@ -901,8 +986,9 @@ onUnmounted(() => {
       <button v-else class="icon-button" aria-label="打开设置" @click="openSettings">⚙</button>
     </header>
 
-    <main ref="contentScroller" class="app-content" :class="{ 'main-dashboard': state.activePage === 'water' || state.activePage === 'screen' }" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
+    <main ref="contentScroller" class="app-content" :class="{ 'main-dashboard': state.activePage === 'water' || state.activePage === 'screen', 'water-dashboard-page': state.activePage === 'water' }" @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd">
       <template v-if="state.activePage === 'water'">
+        <div class="water-dashboard-layout">
         <section class="today-water-card" aria-label="今日饮水统计">
           <div class="water-card-heading"><div><span>今日饮水</span><small>{{ todayWaterDateText }}</small></div><div class="water-drop" aria-hidden="true">💧</div></div>
           <div class="water-total"><strong>{{ state.waterHistory.todayTotalMl.toLocaleString('zh-CN') }}</strong><span>ml</span></div>
@@ -913,7 +999,7 @@ onUnmounted(() => {
           </div>
           <p>{{ state.waterHistory.todayRecordCount ? '每一次认真记录，都让今天的饮水节奏更清晰。' : '完成一次“已喝”验证后，今日饮水量会显示在这里。' }}</p>
         </section>
-        <section class="card compact-dashboard-card">
+        <section class="card compact-dashboard-card water-dashboard-overview">
           <div class="dashboard-card-title">
             <h2>喝水提醒概览</h2>
             <div>
@@ -932,9 +1018,8 @@ onUnmounted(() => {
             <div><span>连续未喝</span><strong>{{ state.waterHistory.consecutiveNotDrank }}/3 次</strong></div>
             <div><span>最近记录</span><strong>{{ waterRecordText(latestWaterRecord) }}</strong></div>
           </div>
-          <details v-if="state.waterHistory.records.length" class="sound-note compact-note local-records"><summary>查看本地喝水记录</summary><div v-for="record in state.waterHistory.records.slice(0, 5)" :key="record.id"><span>{{ formatTimestamp(record.timestamp) }}</span><strong>{{ waterRecordText(record) }}</strong></div></details>
         </section>
-        <section class="actions compact-actions">
+        <section class="actions compact-actions water-dashboard-actions">
           <button :disabled="state.loading || state.saving" @click="enableReminder">开启提醒</button>
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableReminder">关闭提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="openWaterCheckInPage('', false, 'drank')">自主记录喝水</button>
@@ -942,6 +1027,7 @@ onUnmounted(() => {
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshStatus(true)">刷新状态</button>
         </section>
+        </div>
       </template>
 
       <template v-else-if="state.activePage === 'screen'">
@@ -1006,7 +1092,7 @@ onUnmounted(() => {
             <label>容器加水总重量（克）<input v-model.number="waterCheckIn.totalWeightGrams" type="number" min="0" max="105000" step="0.1" inputmode="decimal" placeholder="放上秤后输入总重量" /></label>
             <div class="calculation-card"><span>自动换算</span><strong>{{ calculatedWaterMl }} ml</strong><small>总重量 {{ Number(waterCheckIn.totalWeightGrams || 0) }}g − 空容器 {{ selectedWaterContainer?.emptyWeightGrams || 0 }}g；按 1g 水≈1ml 计算</small></div>
           </template>
-          <label class="photo-picker">饮水凭证照片（仅本机保存）<input type="file" accept="image/*" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '拍摄或选择杯子、饮料、营养成分表、药物说明' }}</span></label>
+          <label class="photo-picker">饮水凭证照片（仅本机保存）<input type="file" accept="image/*" @click="beginFilePicker" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '拍摄或选择杯子、饮料、营养成分表、药物说明' }}</span></label>
           <p v-if="waterCheckIn.message" class="inline-message">{{ waterCheckIn.message }}</p>
           <div class="actions"><button :disabled="waterCheckIn.submitting" @click="submitWaterDrank">{{ waterCheckIn.submitting ? '正在保存…' : '保存本次记录' }}</button><button class="ghost" @click="isManualWaterCheckIn ? switchPage('water') : waterCheckIn.action = 'prompt'">{{ isManualWaterCheckIn ? '取消记录' : '返回选择' }}</button></div>
         </section>
@@ -1014,7 +1100,7 @@ onUnmounted(() => {
         <section v-else class="card form-card state-check-card">
           <h2>状态自拍验证</h2>
           <p>照片只写入应用本地目录，不会上传网络。完成后会重新安排稍后提醒。</p>
-          <label class="photo-picker urgent-picker">当前状态自拍<input type="file" accept="image/*" capture="user" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '立即拍摄或选择图片' }}</span></label>
+          <label class="photo-picker urgent-picker">当前状态自拍<input type="file" accept="image/*" capture="user" @click="beginFilePicker" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '立即拍摄或选择图片' }}</span></label>
           <p v-if="waterCheckIn.message" class="inline-message warning">{{ waterCheckIn.message }}</p>
           <button class="full-button" :disabled="waterCheckIn.submitting" @click="submitWaterStateCheck">{{ waterCheckIn.submitting ? '正在保存…' : '完成验证' }}</button>
         </section>
@@ -1086,7 +1172,7 @@ onUnmounted(() => {
           <p class="sound-note">已预置“常用水杯 241.5g”。容器使用稳定 ID 存储，修改应用包名时可随饮水数据一起迁移。</p>
           <div class="data-transfer">
             <button class="ghost" :disabled="state.loading" @click="exportWaterData">导出数据与照片</button>
-            <label class="file-picker">导入迁移档案<input type="file" accept="application/zip,.zip,.waterdata" :disabled="state.loading" @change="importWaterData" /></label>
+            <label class="file-picker">导入迁移档案<input type="file" accept="application/zip,.zip,.waterdata" :disabled="state.loading" @click="beginFilePicker" @change="importWaterData" /></label>
           </div>
           <p class="sound-note">迁移档案采用与包名无关的版本化格式，包含容器、历史记录和本地图片；导入前不会读取绝对文件路径。</p>
         </section>
@@ -1096,7 +1182,7 @@ onUnmounted(() => {
           <label>喝水提醒音量 {{ state.status.waterVolumePercent }}%<input v-model.number="state.status.waterVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.waterSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('water', 'default')">使用系统默认提示音</button>
-            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'water'" @change.stop="importCustomSound('water', $event)" /></label>
+            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'water'" @click="beginFilePicker" @change.stop="importCustomSound('water', $event)" /></label>
           </div>
         </section>
         <p class="auto-save-note">输入内容在焦点移出后自动保存，无需手动提交。</p>
@@ -1120,7 +1206,7 @@ onUnmounted(() => {
           <label>屏幕提醒音量 {{ state.status.screenVolumePercent }}%<input v-model.number="state.status.screenVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.screenSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('screen_limit', 'default')">使用系统默认提示音</button>
-            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'screen_limit'" @change.stop="importCustomSound('screen_limit', $event)" /></label>
+            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'screen_limit'" @click="beginFilePicker" @change.stop="importCustomSound('screen_limit', $event)" /></label>
           </div>
         </section>
         <p class="auto-save-note">输入内容在焦点移出后自动保存，无需手动提交。</p>
