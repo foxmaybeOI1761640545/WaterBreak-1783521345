@@ -113,6 +113,8 @@ export interface WaterCheckInRecord {
   containerName?: string
   emptyWeightGrams?: number
   totalWeightGrams?: number
+  drinkType?: string
+  description?: string
 }
 
 export interface WaterCheckInHistory {
@@ -176,7 +178,7 @@ export interface WaterReminderPlugin {
   saveWaterContainer(payload: { id?: string; name: string; emptyWeightGrams: number }): Promise<{ containers: WaterContainer[] }>
   deleteWaterContainer(payload: { id: string }): Promise<{ deleted: boolean; containers: WaterContainer[] }>
   dismissWaterAlertUi(): Promise<void>
-  saveWaterDrankRecord(payload: LocalImagePayload & { amountMl: number; entryMode: 'volume' | 'container'; containerId?: string; containerName?: string; emptyWeightGrams?: number; totalWeightGrams?: number }): Promise<WaterCheckInHistory>
+  saveWaterDrankRecord(payload: LocalImagePayload & { amountMl: number; entryMode: 'volume' | 'container'; drinkType: string; description?: string; containerId?: string; containerName?: string; emptyWeightGrams?: number; totalWeightGrams?: number }): Promise<WaterCheckInHistory>
   recordWaterNotDrank(payload: { sessionId: string }): Promise<{ accepted: boolean; consecutiveCount: number; requiresStatePhoto: boolean; retryMinutes: number }>
   saveWaterStateCheck(payload: LocalImagePayload): Promise<WaterCheckInHistory>
   getWaterPhoto(payload: { photoFileName: string }): Promise<{ mimeType: string; dataBase64: string }>

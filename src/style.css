@@ -55,6 +55,7 @@ h2 { margin: 0 0 18px; }
 label { display:block; color:#3f5d70; font-weight:700; margin-bottom:14px; }
 input, textarea, select { width:100%; margin-top:8px; border:1px solid #c9e2ec; border-radius:16px; padding:13px 14px; background:#fbfeff; color:#17324d; outline:none; }
 input:focus, textarea:focus, select:focus { border-color:#16a3d2; box-shadow:0 0 0 4px rgba(22,163,210,.14); }
+.field-note { display:block; margin-top:6px; color:#6a8292; font-size:.78rem; font-weight:500; }
 .sound-options { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; align-items:stretch; }
 .file-picker { display:flex; align-items:center; justify-content:center; min-height:54px; margin:0; border:1px solid #bfdeea; border-radius:18px; color:#166985; background:white; text-align:center; cursor:pointer; }
 .file-picker input { position:absolute; inline-size:1px; block-size:1px; opacity:0; pointer-events:none; }
@@ -270,6 +271,10 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .inline-message.warning { color:#b45309; background:#fff7ed; }
 .full-button { width:100%; }
 .state-check-card > p { color:#557083; line-height:1.55; }
+.drink-type-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-bottom:16px; }
+.drink-type-grid button { min-width:0; padding:10px 6px; }
+.history-description { margin:10px 0 0; padding:10px 12px; border-radius:13px; color:#557083; background:#f4fbfe; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.auto-save-note { margin:4px 0 10px; color:#0f766e; font-size:.88rem; text-align:center; }
 .history-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
 .history-summary div { display:flex; flex-direction:column; gap:5px; padding:18px; color:white; border-radius:21px; background:linear-gradient(135deg,#0284c7,#14b8a6); box-shadow:0 14px 28px rgba(2,132,199,.18); }
 .history-summary span { color:rgba(255,255,255,.76); font-size:.85rem; }
@@ -303,6 +308,8 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
   .check-in-choice { grid-template-columns:1fr; }
   .check-in-choice small { grid-column:auto; }
   .mode-switch button { padding:11px 8px; font-size:.86rem; }
+  .drink-type-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }
+  .drink-type-grid button { font-size:.82rem; }
   .history-content > div:first-child { flex-direction:column; gap:4px; }
   .container-row { grid-template-columns:1fr 1fr; }
   .container-row > div { grid-column:1/-1; }

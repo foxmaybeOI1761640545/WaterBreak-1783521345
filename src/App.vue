@@ -7,6 +7,7 @@ import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type Remind
 type MainPage = 'water' | 'screen'
 type AppPage = MainPage | 'waterSettings' | 'screenSettings' | 'permissionGuide' | 'waterCheckIn' | 'waterHistory'
 type WaterAmountMode = 'volume' | 'container'
+type WaterDrinkType = '白水' | '冲剂' | '药物' | '饮料' | '茶水' | '果茶' | '奶茶' | '其他'
 type PermissionGuideKey = 'notifications' | 'exact' | 'overlay' | 'usage' | 'fullScreen' | 'waterNotification' | 'screenNotification' | 'deviceAdmin' | 'battery' | 'miuiPermissions' | 'miuiAutostart'
 type PermissionGuidePhase = 'idle' | 'refreshing' | 'ready' | 'launching' | 'waitingReturn' | 'reviewing' | 'complete'
 interface PermissionGuideItem { key: PermissionGuideKey; title: string; purpose: string; status: PermissionValue; applicable: boolean; required: boolean; actionLabel?: string; details?: string }
@@ -96,6 +97,8 @@ const waterCheckIn = reactive({
   directMl: null as number | null,
   totalWeightGrams: null as number | null,
   containerId: '',
+  drinkType: '白水' as WaterDrinkType,
+  description: '',
   photoName: '',
   photoMimeType: '',
   photoBase64: '',
@@ -133,6 +136,8 @@ const calculatedWaterMl = computed(() => {
   if (!Number.isFinite(total) || !Number.isFinite(empty)) return 0
   return Math.max(0, Math.round((total - empty) * 10) / 10)
 })
+const waterDrinkTypes: WaterDrinkType[] = ['白水', '冲剂', '药物', '饮料', '茶水', '果茶', '奶茶', '其他']
+const isManualWaterCheckIn = computed(() => state.activePage === 'waterCheckIn' && !waterCheckIn.sessionId && !waterCheckIn.isTest)
 const cancelCycleText = computed(() => {
   if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
   if (screenCyclePhase.value === 'alerting') return '提醒中'
@@ -151,6 +156,8 @@ let backButtonHandle: PluginListenerHandle | undefined
 let appStateHandle: PluginListenerHandle | undefined
 let appUrlOpenHandle: PluginListenerHandle | undefined
 let messageTimer: number | undefined
+let autoSaveTimer: number | undefined
+let lastSavedConfigSignature = ''
 let screenDashboardRefresh: Promise<void> | null = null
 let waterSummaryDayKey = new Date().toDateString()
 const contentScroller = ref<HTMLElement | null>(null)
@@ -180,7 +187,7 @@ function formatNextReminder(timestamp: number) {
 }
 function waterRecordText(record?: WaterCheckInRecord) {
   if (!record) return '暂无记录'
-  if (record.type === 'drank') return `已喝 ${record.amountMl || 0} 毫升${record.entryMode === 'container' ? `（${record.containerName || '容器'}称重）` : ''}`
+  if (record.type === 'drank') return `${record.drinkType || '饮水'} · ${record.amountMl || 0} 毫升${record.entryMode === 'container' ? `（${record.containerName || '容器'}称重）` : ''}`
   if (record.type === 'state_check') return '已完成状态自拍验证'
   return `未喝（连续 ${record.consecutiveNotDrank || 1}/3 次）`
 }
@@ -315,8 +322,36 @@ function updateTime(kind: 'start' | 'end', event: Event) {
 }
 
 function updateNextReminderInput() { state.nextReminderInput = state.status.nextReminderTime ? toDateTimeLocalValue(state.status.nextReminderTime) : '' }
-function parseNextReminderInput() { const parsed = state.nextReminderInput ? new Date(state.nextReminderInput).getTime() : 0; return Number.isFinite(parsed) ? parsed : (state.status.nextReminderTime ?? 0) }
+function nextMinuteTimestamp() { return (Math.floor(Date.now() / 60_000) + 1) * 60_000 }
+function parseNextReminderInput() {
+  const parsed = state.nextReminderInput ? new Date(state.nextReminderInput).getTime() : nextMinuteTimestamp()
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : nextMinuteTimestamp()
+}
 function toDateTimeLocalValue(timestamp: number) { const date = new Date(timestamp); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) }
+function normalizedNumber(value: unknown, fallback: number, min: number, max: number) {
+  if (value === '' || value == null) return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback
+}
+function normalizeSettings(source: MainPage) {
+  if (source === 'water') {
+    state.status.minIntervalMinutes = normalizedNumber(state.status.minIntervalMinutes, defaultStatus.minIntervalMinutes, 15, 360)
+    state.status.maxIntervalMinutes = normalizedNumber(state.status.maxIntervalMinutes, Math.max(defaultStatus.maxIntervalMinutes, state.status.minIntervalMinutes), state.status.minIntervalMinutes, 360)
+    state.status.waterRetryMinutes = normalizedNumber(state.status.waterRetryMinutes, defaultStatus.waterRetryMinutes, 1, 180)
+    state.status.waterVolumePercent = normalizedNumber(state.status.waterVolumePercent, defaultStatus.waterVolumePercent, 0, 100)
+    state.status.waterNotificationTitle = state.status.waterNotificationTitle.trim() || defaultStatus.waterNotificationTitle
+    state.status.waterNotificationText = state.status.waterNotificationText.trim() || defaultStatus.waterNotificationText
+    if (!state.nextReminderInput || !Number.isFinite(new Date(state.nextReminderInput).getTime())) {
+      state.nextReminderInput = toDateTimeLocalValue(nextMinuteTimestamp())
+    }
+  } else {
+    state.status.screenOnLimitMinutes = normalizedNumber(state.status.screenOnLimitMinutes, defaultStatus.screenOnLimitMinutes, 0, 1440)
+    state.status.requiredScreenOffMinutes = normalizedNumber(state.status.requiredScreenOffMinutes, defaultStatus.requiredScreenOffMinutes, 1, 1440)
+    state.status.cancelBeforeLockCount = normalizedNumber(state.status.cancelBeforeLockCount, defaultStatus.cancelBeforeLockCount, 1, 99)
+    state.status.screenVolumePercent = normalizedNumber(state.status.screenVolumePercent, defaultStatus.screenVolumePercent, 0, 100)
+  }
+}
+function configSignature(config: ReminderConfig) { return JSON.stringify(config) }
 
 async function refreshScreenDashboard(showMessage = false) {
   if (screenDashboardRefresh) return screenDashboardRefresh
@@ -375,6 +410,7 @@ async function refreshStatus(showMessage = false) {
     state.waterContainers = containerResult.containers
     if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
     updateNextReminderInput()
+    lastSavedConfigSignature = configSignature(buildConfig())
     await refreshScreenDashboard(false)
     if (showMessage) setUserMessage('状态已更新')
   } catch (error) {
@@ -382,19 +418,28 @@ async function refreshStatus(showMessage = false) {
     setUserMessage(error instanceof Error ? error.message : '读取状态失败', 4000)
   } finally { state.loading = false }
 }
-async function saveConfig(message: string, overrides: Partial<ReminderConfig> = {}) {
+async function saveConfig(message: string, overrides: Partial<ReminderConfig> = {}, requestPermission = true, skipUnchanged = false) {
   state.saving = true
   try {
     const config = buildConfig(overrides)
     validateConfig(config)
-    state.permissions = await WaterReminder.requestNotificationPermission()
+    const signature = configSignature(config)
+    if (skipUnchanged && signature === lastSavedConfigSignature) return
+    if (requestPermission) state.permissions = await WaterReminder.requestNotificationPermission()
     state.status = { ...defaultStatus, ...await WaterReminder.startReminder(config) }
     updateNextReminderInput()
+    lastSavedConfigSignature = configSignature(buildConfig())
     setUserMessage(message)
   } catch (error) { setUserMessage(error instanceof Error ? error.message : message.includes('开启') ? '开启提醒失败' : '保存提醒设置失败', 4000) } finally { state.saving = false }
 }
-function saveWaterSettings() { return saveConfig('喝水提醒设置已保存') }
-function saveScreenSettings() { return saveConfig('屏幕记录设置已保存') }
+function autoSaveSettings(source: MainPage) {
+  normalizeSettings(source)
+  if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
+  autoSaveTimer = window.setTimeout(() => {
+    if (state.saving) { autoSaveSettings(source); return }
+    void saveConfig(`${source === 'water' ? '喝水提醒' : '屏幕记录'}设置已自动保存`, {}, false, true)
+  }, 260)
+}
 function enableReminder() { return saveConfig('喝水提醒已开启，可划掉应用后等待闹钟触发', { enabled: true }) }
 async function disableReminder() {
   state.saving = true
@@ -538,6 +583,8 @@ function resetWaterCheckIn(sessionId = '', isTest = false, action: 'prompt' | 'd
   waterCheckIn.amountMode = 'volume'
   waterCheckIn.directMl = null
   waterCheckIn.totalWeightGrams = null
+  waterCheckIn.drinkType = '白水'
+  waterCheckIn.description = ''
   waterCheckIn.photoName = ''
   waterCheckIn.photoMimeType = ''
   waterCheckIn.photoBase64 = ''
@@ -552,7 +599,7 @@ async function openWaterCheckInPage(sessionId: string, isTest: boolean, action: 
   }
   const waterHistory = await WaterReminder.getWaterCheckInHistory()
   state.waterHistory = waterHistory
-  resetWaterCheckIn(sessionId, isTest, waterHistory.requiresStatePhoto ? 'forced_state' : action)
+  resetWaterCheckIn(sessionId, isTest, sessionId && waterHistory.requiresStatePhoto ? 'forced_state' : action)
   state.activePage = 'waterCheckIn'
   state.settingsSource = 'water'
   window.history.replaceState({ appPage: 'waterCheckIn', settingsSource: 'water' }, '', location.href)
@@ -568,13 +615,14 @@ async function handleWaterPhoto(event: Event) {
   waterCheckIn.photoName = file.name
   waterCheckIn.photoMimeType = file.type || 'image/jpeg'
   waterCheckIn.photoBase64 = await fileToBase64(file)
-  waterCheckIn.message = '自拍已选择，将在提交后保存到本机。'
+  waterCheckIn.message = '凭证照片已选择，将在提交后保存到本机。'
 }
 async function submitWaterDrank() {
   if (waterCheckIn.submitting) return
   const amount = waterCheckIn.amountMode === 'container' ? calculatedWaterMl.value : Number(waterCheckIn.directMl)
   if (!Number.isFinite(amount) || amount < 1 || amount > 5000) { waterCheckIn.message = '饮水量必须在 1-5000 毫升之间'; return }
-  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择喝水自拍'; return }
+  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择饮水凭证照片'; return }
+  if (waterCheckIn.description.length > 500) { waterCheckIn.message = '喝水说明不能超过 500 个字符'; return }
   if (waterCheckIn.isTest) { waterCheckIn.message = `测试完成：${amount} 毫升，不保存记录`; window.setTimeout(() => switchPage('water'), 900); return }
   waterCheckIn.submitting = true
   try {
@@ -582,6 +630,8 @@ async function submitWaterDrank() {
       sessionId: waterCheckIn.sessionId,
       amountMl: amount,
       entryMode: waterCheckIn.amountMode,
+      drinkType: waterCheckIn.drinkType,
+      description: waterCheckIn.description.trim(),
       containerId: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.id : undefined,
       containerName: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.name : undefined,
       emptyWeightGrams: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.emptyWeightGrams : undefined,
@@ -589,7 +639,7 @@ async function submitWaterDrank() {
       mimeType: waterCheckIn.photoMimeType,
       dataBase64: waterCheckIn.photoBase64,
     })
-    state.message = `已保存本次饮水 ${amount} 毫升及自拍`
+    state.message = `已保存本次${waterCheckIn.drinkType} ${amount} 毫升及凭证照片`
     switchPage('water')
   } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存喝水记录失败' }
   finally { waterCheckIn.submitting = false }
@@ -634,10 +684,14 @@ async function toggleWaterHistoryPhoto(record: WaterCheckInRecord) {
   try {
     const photo = await WaterReminder.getWaterPhoto({ photoFileName: record.photoFileName })
     state.waterHistoryImages[record.id] = `data:${photo.mimeType};base64,${photo.dataBase64}`
-  } catch (error) { state.message = error instanceof Error ? error.message : '读取本地自拍失败' }
+  } catch (error) { state.message = error instanceof Error ? error.message : '读取本地照片失败' }
 }
 function addWaterContainer() { state.waterContainers.push({ id: '', name: '新容器', emptyWeightGrams: 0 }) }
 async function saveWaterContainer(item: WaterContainer) {
+  if (!item.name.trim() || !Number.isFinite(Number(item.emptyWeightGrams)) || Number(item.emptyWeightGrams) <= 0) {
+    state.message = '容器名称或空重未填写，暂未自动保存'
+    return
+  }
   try {
     const result = await WaterReminder.saveWaterContainer({ id: item.id || undefined, name: item.name, emptyWeightGrams: Number(item.emptyWeightGrams) })
     state.waterContainers = result.containers
@@ -720,6 +774,7 @@ onUnmounted(() => {
   appStateHandle?.remove()
   appUrlOpenHandle?.remove()
   if (messageTimer) window.clearTimeout(messageTimer)
+  if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
 })
 </script>
 
@@ -754,7 +809,7 @@ onUnmounted(() => {
               <span class="status-pill compact-status" :class="{ enabled: state.status.enabled }" :aria-label="isEnabledText" :title="isEnabledText">{{ state.status.enabled ? '已开启' : '已关闭' }}</span>
             </div>
           </div>
-          <p class="dashboard-note">到点后选择已喝或未喝；自拍、喝水量与状态验证仅保存在本机。</p>
+          <p class="dashboard-note">到点后选择已喝或未喝；凭证照片、喝水量与状态验证仅保存在本机。</p>
           <p v-if="state.waterHistory.requiresStatePhoto" class="dashboard-warning">已连续三次未喝，下次喝水提醒将要求完成状态自拍验证。</p>
           <div class="summary-grid compact">
             <div><span>下一次提醒</span><strong>{{ nextReminderText }}</strong></div>
@@ -770,7 +825,7 @@ onUnmounted(() => {
         <section class="actions compact-actions">
           <button :disabled="state.loading || state.saving" @click="enableReminder">开启提醒</button>
           <button class="secondary" :disabled="state.loading || state.saving" @click="disableReminder">关闭提醒</button>
-          <button class="ghost" :disabled="state.loading || state.saving" @click="openWaterCheckInPage(`manual-${Date.now()}`, false, 'drank')">记录喝水</button>
+          <button class="ghost" :disabled="state.loading || state.saving" @click="openWaterCheckInPage('', false, 'drank')">自主记录喝水</button>
           <button class="ghost" :disabled="state.loading" @click="openWaterHistory">喝水历史</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button>
           <button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshStatus(true)">刷新状态</button>
@@ -811,8 +866,8 @@ onUnmounted(() => {
         <section class="card check-in-hero" :class="{ urgent: waterCheckIn.action === 'forced_state' }">
           <span class="check-in-icon">{{ waterCheckIn.action === 'forced_state' ? '🛟' : '💧' }}</span>
           <div>
-            <h2>{{ waterCheckIn.action === 'forced_state' ? '请先确认当前状态' : waterCheckIn.action === 'drank' ? '记录这次喝水' : '这次喝水了吗？' }}</h2>
-            <p>{{ waterCheckIn.action === 'forced_state' ? '你已连续三次选择未喝。请上传一张当前状态自拍，照片只保存在本机。' : '提醒已进入应用内处理；关闭本页不会截断独立播放的提示音。' }}</p>
+            <h2>{{ waterCheckIn.action === 'forced_state' ? '请先确认当前状态' : isManualWaterCheckIn ? '自主记录喝水' : waterCheckIn.action === 'drank' ? '记录这次喝水' : '这次喝水了吗？' }}</h2>
+            <p>{{ waterCheckIn.action === 'forced_state' ? '你已连续三次选择未喝。请上传一张当前状态自拍，照片只保存在本机。' : isManualWaterCheckIn ? '当前不是提醒会话，也可以随时记录饮水类型、容量、说明和凭证照片。' : '提醒已进入应用内处理；关闭本页不会截断独立播放的提示音。' }}</p>
           </div>
         </section>
 
@@ -823,6 +878,11 @@ onUnmounted(() => {
         </section>
 
         <section v-else-if="waterCheckIn.action === 'drank'" class="card form-card check-in-form">
+          <h2>喝水类型与说明</h2>
+          <div class="drink-type-grid" role="radiogroup" aria-label="喝水类型">
+            <button v-for="type in waterDrinkTypes" :key="type" class="ghost" :class="{ selected: waterCheckIn.drinkType === type }" @click="waterCheckIn.drinkType = type">{{ type }}</button>
+          </div>
+          <label>喝水说明（选填）<textarea v-model="waterCheckIn.description" rows="3" maxlength="500" placeholder="例如：感冒颗粒一袋、低糖饮料、茶叶种类等" /></label>
           <h2>本次饮水量</h2>
           <div class="mode-switch" role="tablist" aria-label="饮水量录入方式">
             <button :class="{ active: waterCheckIn.amountMode === 'volume' }" @click="waterCheckIn.amountMode = 'volume'">直接输入容量</button>
@@ -834,9 +894,9 @@ onUnmounted(() => {
             <label>容器加水总重量（克）<input v-model.number="waterCheckIn.totalWeightGrams" type="number" min="0" max="105000" step="0.1" inputmode="decimal" placeholder="放上秤后输入总重量" /></label>
             <div class="calculation-card"><span>自动换算</span><strong>{{ calculatedWaterMl }} ml</strong><small>总重量 {{ Number(waterCheckIn.totalWeightGrams || 0) }}g − 空容器 {{ selectedWaterContainer?.emptyWeightGrams || 0 }}g；按 1g 水≈1ml 计算</small></div>
           </template>
-          <label class="photo-picker">喝水自拍（仅本机保存）<input type="file" accept="image/*" capture="user" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '拍照或选择图片' }}</span></label>
+          <label class="photo-picker">饮水凭证照片（仅本机保存）<input type="file" accept="image/*" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName || '拍摄或选择杯子、饮料、营养成分表、药物说明' }}</span></label>
           <p v-if="waterCheckIn.message" class="inline-message">{{ waterCheckIn.message }}</p>
-          <div class="actions"><button :disabled="waterCheckIn.submitting" @click="submitWaterDrank">{{ waterCheckIn.submitting ? '正在保存…' : '保存本次记录' }}</button><button class="ghost" @click="waterCheckIn.action = 'prompt'">返回选择</button></div>
+          <div class="actions"><button :disabled="waterCheckIn.submitting" @click="submitWaterDrank">{{ waterCheckIn.submitting ? '正在保存…' : '保存本次记录' }}</button><button class="ghost" @click="isManualWaterCheckIn ? switchPage('water') : waterCheckIn.action = 'prompt'">{{ isManualWaterCheckIn ? '取消记录' : '返回选择' }}</button></div>
         </section>
 
         <section v-else class="card form-card state-check-card">
@@ -853,14 +913,15 @@ onUnmounted(() => {
           <div><span>今日饮水</span><strong>{{ state.waterHistory.todayTotalMl.toLocaleString('zh-CN') }} ml</strong></div>
           <div><span>今日次数</span><strong>{{ state.waterHistory.todayRecordCount }} 次</strong></div>
         </section>
-        <section v-if="!state.waterHistory.records.length" class="card empty-history"><span>💧</span><h2>还没有喝水记录</h2><p>完成一次“已喝”验证后，记录和自拍会显示在这里。</p></section>
+        <section v-if="!state.waterHistory.records.length" class="card empty-history"><span>💧</span><h2>还没有喝水记录</h2><p>完成一次饮水记录后，类型、说明和凭证照片会显示在这里。</p></section>
         <section v-else class="history-list">
           <article v-for="record in state.waterHistory.records" :key="record.id" class="history-item">
             <div class="history-marker" :class="record.type">{{ record.type === 'drank' ? '💧' : record.type === 'state_check' ? '📷' : '⏳' }}</div>
             <div class="history-content">
               <div><strong>{{ waterRecordText(record) }}</strong><time>{{ formatTimestamp(record.timestamp) }}</time></div>
               <button v-if="record.photoFileName" class="ghost mini-button" @click="toggleWaterHistoryPhoto(record)">{{ state.waterHistoryImages[record.id] ? '收起图片' : '查看本地图片' }}</button>
-              <img v-if="state.waterHistoryImages[record.id]" :src="state.waterHistoryImages[record.id]" alt="喝水记录本地自拍" loading="lazy" />
+              <p v-if="record.description" class="history-description">{{ record.description }}</p>
+              <img v-if="state.waterHistoryImages[record.id]" :src="state.waterHistoryImages[record.id]" alt="喝水记录本地凭证照片" loading="lazy" />
             </div>
           </article>
         </section>
@@ -890,7 +951,7 @@ onUnmounted(() => {
       </template>
 
       <template v-else-if="state.activePage === 'waterSettings'">
-        <section class="card form-card">
+        <section class="card form-card" @change="autoSaveSettings('water')">
           <h2>喝水提醒设置</h2>
           <div class="form-grid">
             <label>开始时间<input :value="timeValue(state.status.startHour, state.status.startMinute)" type="time" @input="updateTime('start', $event)" /></label>
@@ -898,7 +959,7 @@ onUnmounted(() => {
             <label>最小间隔（分钟）<input v-model.number="state.status.minIntervalMinutes" type="number" min="15" max="360" /></label>
             <label>最大间隔（分钟）<input v-model.number="state.status.maxIntervalMinutes" type="number" min="15" max="360" /></label>
             <label>未喝后再次提醒（分钟）<input v-model.number="state.status.waterRetryMinutes" type="number" min="1" max="180" /></label>
-            <label>下次提醒时间<input v-model="state.nextReminderInput" type="datetime-local" /></label>
+            <label>下次提醒时间<input v-model="state.nextReminderInput" type="datetime-local" /><small class="field-note">清空后会自动设置为下一分钟</small></label>
           </div>
           <label>通知标题<input v-model="state.status.waterNotificationTitle" type="text" /></label>
           <label>通知内容<textarea v-model="state.status.waterNotificationText" rows="3" /></label>
@@ -906,9 +967,9 @@ onUnmounted(() => {
         <section class="card form-card container-settings">
           <div class="section-heading"><div><h2>饮水容器</h2><p>称重录入时，用“容器加水总重量 − 空容器重量”换算饮水毫升数。</p></div><button class="ghost mini-button" @click="addWaterContainer">添加容器</button></div>
           <div v-for="item in state.waterContainers" :key="item.id || `draft-${state.waterContainers.indexOf(item)}`" class="container-row">
-            <label>容器名称<input v-model="item.name" type="text" maxlength="30" /></label>
-            <label>空容器重量（克）<input v-model.number="item.emptyWeightGrams" type="number" min="0.1" max="100000" step="0.1" inputmode="decimal" /></label>
-            <div><button class="ghost" @click="saveWaterContainer(item)">保存</button><button class="danger-ghost" @click="deleteWaterContainer(item)">删除</button></div>
+            <label>容器名称<input v-model="item.name" type="text" maxlength="30" @change="saveWaterContainer(item)" /></label>
+            <label>空容器重量（克）<input v-model.number="item.emptyWeightGrams" type="number" min="0.1" max="100000" step="0.1" inputmode="decimal" @change="saveWaterContainer(item)" /></label>
+            <div><button class="danger-ghost" @click="deleteWaterContainer(item)">删除</button></div>
           </div>
           <p class="sound-note">已预置“常用水杯 241.5g”。容器使用稳定 ID 存储，修改应用包名时可随饮水数据一起迁移。</p>
           <div class="data-transfer">
@@ -917,20 +978,21 @@ onUnmounted(() => {
           </div>
           <p class="sound-note">迁移档案采用与包名无关的版本化格式，包含容器、历史记录和本地图片；导入前不会读取绝对文件路径。</p>
         </section>
-        <section class="card form-card">
+        <section class="card form-card" @change="autoSaveSettings('water')">
           <h2>喝水提醒铃声</h2>
           <div class="sound-status-list"><div><span>提示音</span><strong>{{ waterSoundModeText }}</strong></div><div><span>喝水音量</span><strong>{{ state.status.waterVolumePercent }}%</strong></div><div><span>音量说明</span><strong>独立播放任务，关闭弹窗后仍播放到结束；受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
           <label>喝水提醒音量 {{ state.status.waterVolumePercent }}%<input v-model.number="state.status.waterVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.waterSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('water', 'default')">使用系统默认提示音</button>
-            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'water'" @change="importCustomSound('water', $event)" /></label>
+            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'water'" @change.stop="importCustomSound('water', $event)" /></label>
           </div>
         </section>
-        <section class="actions"><button :disabled="state.loading || state.saving" @click="saveWaterSettings">保存设置</button><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('waterNotification')">喝水通知设置</button></section>
+        <p class="auto-save-note">输入内容在焦点移出后自动保存，无需手动提交。</p>
+        <section class="actions"><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('water')">测试喝水提醒</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('waterNotification')">喝水通知设置</button></section>
       </template>
 
       <template v-else>
-        <section class="card form-card">
+        <section class="card form-card" @change="autoSaveSettings('screen')">
           <h2>屏幕记录设置</h2>
           <div class="form-grid">
             <label>屏幕超时提醒启用<select v-model="state.status.screenLimitEnabled"><option :value="true">开启</option><option :value="false">关闭</option></select></label>
@@ -940,16 +1002,17 @@ onUnmounted(() => {
           </div>
           <p class="sound-note">屏幕提醒会显示“熄屏”和“取消”按钮；连续取消达到设置次数后会尝试执行设备管理锁屏。</p>
         </section>
-        <section class="card form-card">
+        <section class="card form-card" @change="autoSaveSettings('screen')">
           <h2>屏幕提醒铃声</h2>
           <div class="sound-status-list"><div><span>提示音</span><strong>{{ screenSoundModeText }}</strong></div><div><span>屏幕音量</span><strong>{{ state.status.screenVolumePercent }}%</strong></div><div><span>音量说明</span><strong>独立播放任务，关闭弹窗后仍播放到结束；受系统铃声/勿扰约束</strong></div><div><span>通知权限</span><strong>{{ state.permissions?.notifications ?? 'unknown' }}</strong></div><div><span>全屏提醒权限</span><strong>{{ state.permissions?.fullScreenIntent ?? 'unknown' }}</strong></div><div><span>悬浮窗权限</span><strong>{{ state.permissions?.overlays ?? 'unknown' }}</strong></div><div><span>使用情况权限</span><strong>{{ state.permissions?.usageStats ?? 'unknown' }}</strong></div><div><span>精确闹钟权限</span><strong>{{ state.permissions?.exactAlarms ?? 'unknown' }}</strong></div></div>
           <label>屏幕提醒音量 {{ state.status.screenVolumePercent }}%<input v-model.number="state.status.screenVolumePercent" type="range" min="0" max="100" /></label>
           <div class="sound-options">
             <button class="ghost" :class="{ selected: state.status.screenSoundMode === 'default' }" :disabled="state.loading || state.saving" @click="setSoundMode('screen_limit', 'default')">使用系统默认提示音</button>
-            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'screen_limit'" @change="importCustomSound('screen_limit', $event)" /></label>
+            <label class="file-picker">导入自定义音频<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" :disabled="state.loading || state.importingSound === 'screen_limit'" @change.stop="importCustomSound('screen_limit', $event)" /></label>
           </div>
         </section>
-        <section class="actions"><button :disabled="state.loading || state.saving" @click="saveScreenSettings">保存设置</button><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button><button class="ghost" @click="openPermissionSettings('usage')">使用情况权限</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('screenNotification')">屏幕通知设置</button></section>
+        <p class="auto-save-note">输入内容在焦点移出后自动保存，无需手动提交。</p>
+        <section class="actions"><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button><button class="ghost" @click="openPermissionSettings('usage')">使用情况权限</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('screenNotification')">屏幕通知设置</button></section>
       </template>
 
       <p v-if="state.message && (state.activePage === 'water' || state.activePage === 'screen')" class="snackbar">{{ state.message }}</p>

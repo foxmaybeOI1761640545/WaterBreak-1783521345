@@ -15,6 +15,8 @@ data class WaterNotDrankResult(
 
 data class WaterMeasurement(
     val entryMode: String = "volume",
+    val drinkType: String = "白水",
+    val description: String = "",
     val containerId: String = "",
     val containerName: String = "",
     val emptyWeightGrams: Double? = null,
@@ -94,6 +96,8 @@ object WaterCheckInStore {
                 .put("photoPath", photoFile.absolutePath)
                 .put("sessionId", sessionId)
                 .put("entryMode", if (measurement.entryMode == "container") "container" else "volume")
+                .put("drinkType", measurement.drinkType.trim().ifBlank { "白水" }.take(40))
+        measurement.description.trim().takeIf { it.isNotBlank() }?.let { record.put("description", it.take(500)) }
         if (measurement.entryMode == "container") {
             measurement.containerId.takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,80}")) }?.let { record.put("containerId", it) }
             measurement.containerName.trim().takeIf { it.isNotBlank() }?.let { record.put("containerName", it.take(80)) }
@@ -211,6 +215,8 @@ object WaterCheckInStore {
                 record.put("amountMl", roundOneDecimal(amount))
                 val entryMode = if (item.optString("entryMode") == "container") "container" else "volume"
                 record.put("entryMode", entryMode)
+                record.put("drinkType", item.optString("drinkType").trim().ifBlank { "白水" }.take(40))
+                item.optString("description").trim().takeIf { it.isNotBlank() }?.let { record.put("description", it.take(500)) }
                 if (entryMode == "container") {
                     item.optString("containerId").takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,80}")) }?.let { record.put("containerId", it) }
                     item.optString("containerName").trim().takeIf { it.isNotBlank() }?.let { record.put("containerName", it.take(80)) }

@@ -265,6 +265,8 @@ class WaterReminderPlugin : Plugin() {
         val photo = saveWaterPhoto(call, "drank") ?: return
         val measurement = WaterMeasurement(
             entryMode = call.getString("entryMode", "volume") ?: "volume",
+            drinkType = call.getString("drinkType", "白水") ?: "白水",
+            description = call.getString("description").orEmpty(),
             containerId = call.getString("containerId").orEmpty(),
             containerName = call.getString("containerName").orEmpty(),
             emptyWeightGrams = call.getDouble("emptyWeightGrams"),
