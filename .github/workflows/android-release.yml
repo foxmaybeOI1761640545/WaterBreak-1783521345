@@ -125,10 +125,10 @@ jobs:
       - name: Build web assets and sync Android
         run: npm run sync:android
 
-      - name: Validate Android Gradle configuration
+      - name: Validate Android Gradle and Kotlin configuration
         env:
           UPDATE_REPOSITORY: ${{ github.repository }}
-        run: cd android && gradle :app:tasks --all
+        run: cd android && gradle :app:tasks --all :app:compileDebugKotlin
 
       - name: Configure fixed release signing
         env:

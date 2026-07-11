@@ -13,6 +13,8 @@
 - Release Tag 指向写入真实版本号的源码提交，Tag 源码、APK 与 Release 版本保持一致。
 - 修复 `buildConfigField` 位于错误 Gradle DSL 层级导致 `assembleRelease` 配置阶段失败的问题。
 - 发布前增加 Gradle 配置预检，并强制核对固定签名证书 SHA-256 指纹。
+- 修复 `AppUpdatePlugin` 将 `Throwable` 直接传给 Capacitor `PluginCall.reject` 导致 Kotlin 编译失败的问题，并保留原始异常原因。
+- Gradle 预检扩展为同时编译 Debug Kotlin，提前发现原生插件类型错误。
 
 ## 已验证
 
@@ -23,10 +25,11 @@
 - GitHub Actions YAML 语法解析
 - 新 JKS 的 alias、密码可用性和证书 SHA-256 指纹
 - GitHub Actions 失败日志根因复核：`android/app/build.gradle:38` 无法在 `android` 顶层调用 `buildConfigField`
+- GitHub Actions 运行 `29157607136` 已确认 Gradle DSL、签名 Secret 和证书指纹校验通过；后续 Kotlin 失败定位到 `AppUpdatePlugin.kt:113/151/176`
 
 ## 当前环境未执行
 
-当前执行环境没有 Android SDK 和 Gradle，因此未在本地运行 `gradle assembleRelease`。已根据 GitHub Actions 运行 `29157010617` 的完整失败日志修复 Gradle 配置错误；项目仍按原要求由 GitHub Actions 安装 Gradle 8.11.1 和 Android SDK 完成最终 APK 构建。
+当前执行环境没有 Android SDK 和 Gradle，因此未在本地运行 `gradle assembleRelease`。已根据 GitHub Actions 运行 `29157010617` 和 `29157607136` 的完整失败日志依次修复 Gradle 配置与 Kotlin 编译错误；项目仍按原要求由 GitHub Actions 安装 Gradle 8.11.1 和 Android SDK 完成最终 APK 构建。
 
 ## 使用前必须做
 

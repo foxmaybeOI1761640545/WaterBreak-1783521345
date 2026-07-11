@@ -89,7 +89,7 @@ concurrency:
 
 ## Gradle 配置预检与签名指纹
 
-`UPDATE_REPOSITORY` 通过 `defaultConfig.buildConfigField` 写入 Android `BuildConfig`。发布工作流会在恢复签名材料前先运行 `gradle :app:tasks --all`，尽早发现 Gradle DSL 配置错误。
+`UPDATE_REPOSITORY` 通过 `defaultConfig.buildConfigField` 写入 Android `BuildConfig`。发布工作流会在恢复签名材料前运行 `gradle :app:tasks --all :app:compileDebugKotlin`，尽早发现 Gradle DSL 配置错误和原生 Kotlin 插件类型错误。
 
 固定 JKS 恢复后，工作流会导出签名证书并强制核对 SHA-256 指纹。证书与本次交付的固定签名不一致时立即失败，避免误用其他 JKS 后发布无法覆盖安装的 APK。
 

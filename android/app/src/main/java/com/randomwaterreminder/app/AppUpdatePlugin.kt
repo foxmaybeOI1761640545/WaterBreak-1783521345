@@ -110,7 +110,7 @@ class AppUpdatePlugin : Plugin() {
                     if (previousVersionCode != manifest.optLong("versionCode", -2L)) clearDownloadState(deleteFile = true)
                 }
                 buildState()
-            }.onSuccess(call::resolve).onFailure { call.reject(it.message ?: "检查更新失败", it) }
+            }.onSuccess(call::resolve).onFailure { rejectWithCause(call, "检查更新失败", it) }
         }.start()
     }
 
@@ -148,7 +148,7 @@ class AppUpdatePlugin : Plugin() {
                 .apply()
             startDownloadMonitor()
             call.resolve(buildState())
-        }.onFailure { call.reject(it.message ?: "开始下载失败", it) }
+        }.onFailure { rejectWithCause(call, "开始下载失败", it) }
     }
 
     @PluginMethod
@@ -173,7 +173,7 @@ class AppUpdatePlugin : Plugin() {
                         put("requiresPermission", false)
                     }
                 }
-            }.onSuccess(call::resolve).onFailure { call.reject(it.message ?: "无法安装更新", it) }
+            }.onSuccess(call::resolve).onFailure { rejectWithCause(call, "无法安装更新", it) }
         }.start()
     }
 
@@ -412,6 +412,10 @@ class AppUpdatePlugin : Plugin() {
     @Suppress("DEPRECATION")
     private fun packageVersionCode(info: PackageInfo): Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else info.versionCode.toLong()
     private fun normalizeChannel(value: String?): String = if (value == "beta") "beta" else "stable"
+    private fun rejectWithCause(call: PluginCall, fallbackMessage: String, error: Throwable) {
+        val exception = error as? Exception ?: RuntimeException(error)
+        call.reject(error.message ?: fallbackMessage, exception)
+    }
 
     companion object {
         private const val PREFS_NAME = "app_update"
