@@ -5,15 +5,15 @@ def isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
     taskName.toLowerCase().contains("release")
 }
 
-def fallbackKeystoreFile = file("fallback-release-keystore.jks")
-def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: (fallbackKeystoreFile.exists() ? fallbackKeystoreFile.absolutePath : null)
-def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: (fallbackKeystoreFile.exists() ? "randomwaterreminder" : null)
-def signingKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: (fallbackKeystoreFile.exists() ? "random-water-reminder" : null)
-def signingKeyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: (fallbackKeystoreFile.exists() ? "randomwaterreminder" : null)
+def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+def signingKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+def signingKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
 def hasSigningEnv = keystorePath && keystorePassword && signingKeyAlias && signingKeyPassword
+def updateRepository = (System.getenv("UPDATE_REPOSITORY") ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
 
 if (isReleaseTaskRequested && !hasSigningEnv) {
-    throw new GradleException("Missing release signing config. Configure ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD or keep android/app/fallback-release-keystore.jks available.")
+    throw new GradleException("Missing release signing config. Configure ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD. Fallback signing is intentionally disabled.")
 }
 
 android {
@@ -23,8 +23,8 @@ android {
         applicationId "com.randomwaterreminder.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
-        versionName "1.0.3"
+        versionCode 7
+        versionName "1.0.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -32,6 +32,10 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    buildFeatures {
+        buildConfig true
+    }
+    buildConfigField "String", "UPDATE_REPOSITORY", "\"${updateRepository}\""
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_21
         targetCompatibility JavaVersion.VERSION_21

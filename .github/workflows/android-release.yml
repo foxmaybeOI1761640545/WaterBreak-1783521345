@@ -2,6 +2,12 @@ name: Build and Release APK
 
 on:
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Publish as prerelease"
+        type: boolean
+        required: true
+        default: true
   push:
     branches: [ main, master, work ]
   pull_request:
@@ -10,16 +16,24 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   build-release:
+    # Fork PRs cannot access the fixed signing secrets and are intentionally skipped.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Refresh tags after acquiring release lock
+        run: git fetch --force --tags origin
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -42,7 +56,7 @@ jobs:
         with:
           gradle-version: 8.11.1
 
-      - name: Compute release version
+      - name: Compute globally increasing release version
         id: release
         shell: bash
         run: |
@@ -50,32 +64,38 @@ jobs:
 
           branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           safe_branch="$(printf '%s' "$branch" | tr '/[:space:]' '--' | tr -cd 'A-Za-z0-9._-')"
-          prefix="${safe_branch}-v1.0."
-          escaped_prefix="${prefix//./\.}"
+          [ -n "$safe_branch" ] || safe_branch="manual"
 
-          latest="$(git tag --list "*${prefix}*" | grep -E "^([0-9]{8}-[0-9]{6}-)?${escaped_prefix}[0-9]+$" | sed -E "s/^([0-9]{8}-[0-9]{6}-)?${escaped_prefix}([0-9]+)$/\2/" | sort -n | tail -1 || true)"
-          if [[ -z "$latest" ]]; then
-            next=0
-          else
-            next=$((latest + 1))
+          # v1.0.6 is the checked-in baseline. Every push/internal PR consumes the
+          # next global patch number, regardless of branch.
+          latest_patch="$(git tag --list | grep -oE 'v1\.0\.[0-9]+' | sed 's/^v1\.0\.//' | sort -n | tail -1 || true)"
+          if [[ -z "$latest_patch" || "$latest_patch" -lt 6 ]]; then
+            latest_patch=6
           fi
+          next_patch=$((latest_patch + 1))
+          version="1.0.${next_patch}"
+          version_code=$((next_patch + 1))
+          timestamp="$(TZ=Asia/Singapore date +'%Y%m%d-%H%M%S')"
+          tag="${timestamp}-${safe_branch}-v${version}"
 
-          version="1.0.${next}"
-          original_tag="${safe_branch}-v${version}"
-          timestamp="$(TZ=Asia/Shanghai date +'%Y%m%d-%H%M%S')"
-          tag="${timestamp}-${original_tag#refs/tags/}"
-          version_code=$((next + 1))
-          apk_name="rwr-v${version}.apk"
+          prerelease=false
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" || "$safe_branch" == "work" ]]; then
+            prerelease=true
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${{ inputs.prerelease }}" == "true" ]]; then
+            prerelease=true
+          fi
+          channel=$([[ "$prerelease" == "true" ]] && echo beta || echo stable)
 
           echo "branch=${safe_branch}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "version_code=${version_code}" >> "$GITHUB_OUTPUT"
-          echo "original_tag=${original_tag}" >> "$GITHUB_OUTPUT"
           echo "timestamp=${timestamp}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "apk_name=${apk_name}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=waterbreak-v${version}.apk" >> "$GITHUB_OUTPUT"
 
-      - name: Apply release version
+      - name: Apply release version to source
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           RELEASE_VERSION_CODE: ${{ steps.release.outputs.version_code }}
@@ -94,11 +114,8 @@ jobs:
           const gradleFile = 'android/app/build.gradle'
           const gradle = fs.readFileSync(gradleFile, 'utf8')
             .replace(/versionCode\s+\d+/, `versionCode ${versionCode}`)
-            .replace(/versionName\s+"\d+\.\d+\.\d+"/, `versionName "${version}"`)
+            .replace(/versionName\s+"[^"]+"/, `versionName "${version}"`)
           fs.writeFileSync(gradleFile, gradle)
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
-          if (pkg.version !== version) throw new Error(`package version mismatch: ${pkg.version} !== ${version}`)
-          console.log(`package version ${pkg.version}`)
           NODE
           grep -E 'version(Code|Name)' android/app/build.gradle
 
@@ -108,65 +125,99 @@ jobs:
       - name: Build web assets and sync Android
         run: npm run sync:android
 
-      - name: Restore fallback signing keystore
-        uses: actions/cache@v4
-        with:
-          path: android/app/fallback-release-keystore.jks
-          key: ${{ runner.os }}-random-water-reminder-fallback-keystore-v1
-
-      - name: Configure release signing
+      - name: Configure fixed release signing
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 || vars.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEY_ALIAS_INPUT: ${{ secrets.ANDROID_KEY_ALIAS || vars.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASSWORD_INPUT: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || vars.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD_INPUT: ${{ secrets.ANDROID_KEY_PASSWORD || vars.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS_INPUT: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD_INPUT: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD_INPUT: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.jks
-            echo "ANDROID_KEYSTORE_PATH=${{ github.workspace }}/android/app/release-keystore.jks" >> "$GITHUB_ENV"
-          else
-            if [ ! -f android/app/fallback-release-keystore.jks ]; then
-              echo "ANDROID_KEYSTORE_BASE64 is not configured and no cached fallback exists; generating workflow fallback keystore."
-              keytool -genkeypair \
-                -v \
-                -keystore android/app/fallback-release-keystore.jks \
-                -storepass "${ANDROID_KEYSTORE_PASSWORD_INPUT:-randomwaterreminder}" \
-                -keypass "${ANDROID_KEY_PASSWORD_INPUT:-randomwaterreminder}" \
-                -alias "${ANDROID_KEY_ALIAS_INPUT:-random-water-reminder}" \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -dname "CN=Random Water Reminder, OU=Fallback Release, O=Random Water Reminder, L=Unknown, ST=Unknown, C=US"
-            else
-              echo "ANDROID_KEYSTORE_BASE64 is not configured; using cached workflow fallback keystore."
+          required=(ANDROID_KEYSTORE_BASE64 ANDROID_KEY_ALIAS_INPUT ANDROID_KEYSTORE_PASSWORD_INPUT ANDROID_KEY_PASSWORD_INPUT)
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required GitHub Actions secret: ${name%_INPUT}"
+              exit 1
             fi
-            echo "ANDROID_KEYSTORE_PATH=${{ github.workspace }}/android/app/fallback-release-keystore.jks" >> "$GITHUB_ENV"
-          fi
-          echo "ANDROID_KEY_ALIAS=${ANDROID_KEY_ALIAS_INPUT:-random-water-reminder}" >> "$GITHUB_ENV"
-          echo "ANDROID_KEYSTORE_PASSWORD=${ANDROID_KEYSTORE_PASSWORD_INPUT:-randomwaterreminder}" >> "$GITHUB_ENV"
-          echo "ANDROID_KEY_PASSWORD=${ANDROID_KEY_PASSWORD_INPUT:-randomwaterreminder}" >> "$GITHUB_ENV"
+          done
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.jks
+          chmod 600 android/app/release-keystore.jks
+          echo "ANDROID_KEYSTORE_PATH=${{ github.workspace }}/android/app/release-keystore.jks" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS_INPUT" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD_INPUT" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD_INPUT" >> "$GITHUB_ENV"
+          keytool -list -keystore android/app/release-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD_INPUT" -alias "$ANDROID_KEY_ALIAS_INPUT" >/dev/null
 
       - name: Build signed release APK
+        env:
+          UPDATE_REPOSITORY: ${{ github.repository }}
         run: cd android && gradle assembleRelease
 
-      - name: Prepare APK artifact
+      - name: Verify and prepare release assets
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_VERSION_CODE: ${{ steps.release.outputs.version_code }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
+          set -euo pipefail
           mkdir -p release
-          cp android/app/build/outputs/apk/release/app-release.apk "release/${{ steps.release.outputs.apk_name }}"
+          cp android/app/build/outputs/apk/release/app-release.apk release/waterbreak.apk
+          cp release/waterbreak.apk "release/waterbreak-v${RELEASE_VERSION}.apk"
 
-      - name: Create release tag
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$build_tools/apksigner" verify --verbose --print-certs release/waterbreak.apk
+          sha256="$(sha256sum release/waterbreak.apk | awk '{print $1}')"
+          size="$(stat -c '%s' release/waterbreak.apk)"
+          export published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          export apk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/waterbreak.apk"
+          export release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+          export sha256 size
+
+          node - <<'NODE'
+          const fs = require('fs')
+          const manifest = {
+            schemaVersion: 1,
+            appId: 'com.randomwaterreminder.app',
+            channel: process.env.RELEASE_CHANNEL,
+            versionName: process.env.RELEASE_VERSION,
+            versionCode: Number(process.env.RELEASE_VERSION_CODE),
+            minimumSupportedVersionCode: 7,
+            mandatory: false,
+            prerelease: process.env.RELEASE_PRERELEASE === 'true',
+            publishedAt: process.env.published_at,
+            apkUrl: process.env.apk_url,
+            releasePageUrl: process.env.release_url,
+            sha256: process.env.sha256,
+            size: Number(process.env.size),
+            releaseNotes: [
+              `GitHub Actions 自动构建 ${process.env.RELEASE_TAG}`,
+              `来源分支：${process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME}`,
+              `提交：${process.env.GITHUB_SHA.slice(0, 12)}`
+            ]
+          }
+          fs.writeFileSync('release/update.json', `${JSON.stringify(manifest, null, 2)}\n`)
+          NODE
+
+      - name: Create versioned source tag
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json android/app/build.gradle
+          git commit -m "chore(release): v${{ steps.release.outputs.version }} [skip ci]"
           git tag -a "${{ steps.release.outputs.tag }}" -m "Release ${{ steps.release.outputs.tag }}"
           git push origin "${{ steps.release.outputs.tag }}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.release.outputs.apk_name }}
-          path: release/${{ steps.release.outputs.apk_name }}
+          name: waterbreak-v${{ steps.release.outputs.version }}
+          path: |
+            release/waterbreak.apk
+            release/waterbreak-v${{ steps.release.outputs.version }}.apk
+            release/update.json
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -174,10 +225,18 @@ jobs:
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: ${{ steps.release.outputs.tag }}
+          prerelease: ${{ steps.release.outputs.prerelease }}
           body: |
-            Automated release for ${{ steps.release.outputs.tag }}.
-            App version: ${{ steps.release.outputs.version }}
-            Direct install file: ${{ steps.release.outputs.apk_name }}
-          files: release/${{ steps.release.outputs.apk_name }}
+            Automated ${{ steps.release.outputs.channel }} release for `${{ steps.release.outputs.tag }}`.
+
+            - App version: `${{ steps.release.outputs.version }}`
+            - Version code: `${{ steps.release.outputs.version_code }}`
+            - Source branch: `${{ steps.release.outputs.branch }}`
+            - Fixed install asset: `waterbreak.apk`
+            - Update metadata: `update.json`
+          files: |
+            release/waterbreak.apk
+            release/waterbreak-v${{ steps.release.outputs.version }}.apk
+            release/update.json
           fail_on_unmatched_files: true
           generate_release_notes: true

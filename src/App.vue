@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { App as CapacitorApp } from '@capacitor/app'
 import type { PluginListenerHandle } from '@capacitor/core'
+import { AppUpdate, type UpdateChannel, type UpdateState } from './plugins/AppUpdate'
 import { WaterReminder, type ReminderConfig, type ReminderSoundMode, type ReminderStatus, type PermissionStatus, type PermissionValue, type ScreenStateStatus, type ReminderType, type WaterCheckInHistory, type WaterCheckInRecord, type WaterContainer } from './plugins/WaterReminder'
 
 type MainPage = 'water' | 'screen'
@@ -63,6 +64,22 @@ const defaultStatus: ReminderStatus = {
   screenCustomSoundName: '',
   screenVolumePercent: 100,
 }
+
+const appUpdate = reactive<UpdateState>({
+  currentVersionName: '1.0.6',
+  currentVersionCode: 7,
+  repository: '',
+  channel: 'stable',
+  available: false,
+  status: 'idle',
+  progress: 0,
+  downloadedBytes: 0,
+  totalBytes: 0,
+})
+const updateDialogDismissed = ref(false)
+const updateBusy = ref(false)
+const installAfterDownload = ref(false)
+const retryInstallOnResume = ref(false)
 
 const state = reactive<State>({
   loading: true,
@@ -149,12 +166,26 @@ const cancelCycleText = computed(() => {
 const isSettingsPage = computed(() => state.activePage === 'waterSettings' || state.activePage === 'screenSettings')
 const isPermissionGuidePage = computed(() => state.activePage === 'permissionGuide')
 const isWaterFlowPage = computed(() => state.activePage === 'waterCheckIn' || state.activePage === 'waterHistory')
+const updateStatusText = computed(() => {
+  if (updateBusy.value && appUpdate.status === 'idle') return '正在检查更新…'
+  if (appUpdate.status === 'running' || appUpdate.status === 'pending') return `正在下载 ${appUpdate.progress}%`
+  if (appUpdate.status === 'downloaded') return '更新包已下载并通过校验'
+  if (appUpdate.status === 'failed') return appUpdate.error || '更新下载失败'
+  if (appUpdate.available) return `发现新版本 ${appUpdate.latestVersionName || ''}`.trim()
+  if (appUpdate.lastCheckedAt) return '当前已是最新版本'
+  return '尚未检查更新'
+})
+const updateActionText = computed(() => appUpdate.status === 'downloaded' ? '安装更新' : appUpdate.status === 'running' || appUpdate.status === 'pending' ? `下载中 ${appUpdate.progress}%` : '下载并安装')
+const shouldShowUpdateDialog = computed(() => appUpdate.available && !updateDialogDismissed.value)
+const formattedUpdateSize = computed(() => appUpdate.size ? `${(appUpdate.size / 1024 / 1024).toFixed(1)} MB` : '')
 
 let ticker: number | undefined
 let screenRefreshTicker: number | undefined
 let backButtonHandle: PluginListenerHandle | undefined
 let appStateHandle: PluginListenerHandle | undefined
 let appUrlOpenHandle: PluginListenerHandle | undefined
+let appUpdateHandle: PluginListenerHandle | undefined
+let updateCheckTimer: number | undefined
 let messageTimer: number | undefined
 let autoSaveTimer: number | undefined
 let lastSavedConfigSignature = ''
@@ -726,8 +757,84 @@ async function importWaterData(event: Event) {
   } catch (error) { state.message = error instanceof Error ? error.message : '导入喝水数据失败' }
   finally { state.loading = false; input.value = '' }
 }
+function mergeUpdateState(next: UpdateState) {
+  const previousLatest = appUpdate.latestVersionCode
+  Object.assign(appUpdate, next)
+  if (next.available && next.latestVersionCode !== previousLatest) updateDialogDismissed.value = false
+}
+async function loadUpdateState() {
+  try { mergeUpdateState(await AppUpdate.getUpdateState()) }
+  catch { /* Browser preview or an old native build may not expose the update plugin. */ }
+}
+async function checkForAppUpdate(manual = true) {
+  updateBusy.value = true
+  try {
+    mergeUpdateState(await AppUpdate.checkForUpdate({ channel: appUpdate.channel, manual }))
+    if (manual) setUserMessage(appUpdate.available ? `发现新版本 ${appUpdate.latestVersionName}` : '当前已是最新版本', 2600)
+  } catch (error) {
+    if (manual) setUserMessage(error instanceof Error ? error.message : '检查更新失败', 4000)
+  } finally { updateBusy.value = false }
+}
+async function changeUpdateChannel(event: Event) {
+  const channel = (event.target as HTMLSelectElement).value as UpdateChannel
+  try {
+    mergeUpdateState(await AppUpdate.setUpdateChannel({ channel }))
+    await checkForAppUpdate(true)
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : '切换更新渠道失败', 4000) }
+}
+async function installDownloadedUpdate() {
+  updateBusy.value = true
+  try {
+    const result = await AppUpdate.installDownloadedUpdate()
+    if (result.requiresPermission) {
+      retryInstallOnResume.value = true
+      await AppUpdate.openUnknownSourceSettings()
+      setUserMessage('请允许水息守护安装未知应用，返回后会再次打开安装确认页', 5000)
+    } else if (result.started) {
+      retryInstallOnResume.value = false
+      setUserMessage('已打开系统安装确认页', 2500)
+    }
+  } catch (error) {
+    installAfterDownload.value = false
+    setUserMessage(error instanceof Error ? error.message : '无法安装更新', 5000)
+  } finally { updateBusy.value = false }
+}
+async function downloadAndInstallUpdate() {
+  if (appUpdate.status === 'downloaded') { await installDownloadedUpdate(); return }
+  if (appUpdate.status === 'running' || appUpdate.status === 'pending') return
+  installAfterDownload.value = true
+  updateBusy.value = true
+  try { mergeUpdateState(await AppUpdate.downloadUpdate()) }
+  catch (error) {
+    installAfterDownload.value = false
+    setUserMessage(error instanceof Error ? error.message : '开始下载更新失败', 5000)
+  } finally { updateBusy.value = false }
+}
+function dismissUpdateDialog() {
+  if (!appUpdate.mandatory) updateDialogDismissed.value = true
+}
+function handleUpdateDownloadState(next: UpdateState) {
+  mergeUpdateState(next)
+  if (next.status === 'downloaded' && installAfterDownload.value) {
+    installAfterDownload.value = false
+    void installDownloadedUpdate()
+  }
+  if (next.status === 'failed') {
+    installAfterDownload.value = false
+    setUserMessage(next.error || '更新下载失败', 5000)
+  }
+}
 function handleVisibilityChange() { if (document.visibilityState === 'visible') { state.now = Date.now(); if (state.permissionGuidePhase === 'waitingReturn' && !state.permissionGuideDidLeaveApp && Date.now() - state.permissionGuideLastOpenedAt > 1200) reviewPermissionReturn('web'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() } }
-function handleAppStateChange(isActive: boolean) { if (!isActive) { if (state.permissionGuidePhase === 'waitingReturn') state.permissionGuideDidLeaveApp = true; return } if (state.permissionGuidePhase === 'waitingReturn' && state.permissionGuideDidLeaveApp) reviewPermissionReturn('native'); else if (state.activePage === 'screen') refreshScreenDashboard(false); else refreshStatus() }
+function handleAppStateChange(isActive: boolean) {
+  if (!isActive) {
+    if (state.permissionGuidePhase === 'waitingReturn') state.permissionGuideDidLeaveApp = true
+    return
+  }
+  if (retryInstallOnResume.value && appUpdate.status === 'downloaded') void installDownloadedUpdate()
+  if (state.permissionGuidePhase === 'waitingReturn' && state.permissionGuideDidLeaveApp) reviewPermissionReturn('native')
+  else if (state.activePage === 'screen') refreshScreenDashboard(false)
+  else refreshStatus()
+}
 function handleAppLaunchUrl(url?: string) {
   if (!url) return
   try {
@@ -764,6 +871,9 @@ onMounted(() => {
   CapacitorApp.addListener('appStateChange', ({ isActive }) => handleAppStateChange(isActive)).then(handle => { appStateHandle = handle })
   CapacitorApp.addListener('appUrlOpen', ({ url }) => handleAppLaunchUrl(url)).then(handle => { appUrlOpenHandle = handle })
   CapacitorApp.getLaunchUrl().then(result => handleAppLaunchUrl(result?.url)).catch(() => undefined)
+  void loadUpdateState()
+  AppUpdate.addListener('updateDownloadState', handleUpdateDownloadState).then(handle => { appUpdateHandle = handle }).catch(() => undefined)
+  updateCheckTimer = window.setTimeout(() => { void checkForAppUpdate(false) }, 2500)
 })
 onUnmounted(() => {
   if (ticker) window.clearInterval(ticker)
@@ -773,6 +883,8 @@ onUnmounted(() => {
   backButtonHandle?.remove()
   appStateHandle?.remove()
   appUrlOpenHandle?.remove()
+  appUpdateHandle?.remove()
+  if (updateCheckTimer) window.clearTimeout(updateCheckTimer)
   if (messageTimer) window.clearTimeout(messageTimer)
   if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
 })
@@ -1015,10 +1127,46 @@ onUnmounted(() => {
         <section class="actions"><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button><button class="ghost" @click="openPermissionSettings('usage')">使用情况权限</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('screenNotification')">屏幕通知设置</button></section>
       </template>
 
+      <section v-if="isSettingsPage" class="card form-card update-card">
+        <div class="section-heading">
+          <div><h2>应用更新</h2><p>自动从当前 GitHub 仓库检查版本、下载 APK、校验哈希与签名，然后打开系统安装确认页。</p></div>
+          <span class="status-pill" :class="{ enabled: appUpdate.available }">v{{ appUpdate.currentVersionName }}</span>
+        </div>
+        <div class="update-status-grid">
+          <div><span>当前版本</span><strong>{{ appUpdate.currentVersionName }}（{{ appUpdate.currentVersionCode }}）</strong></div>
+          <div><span>更新渠道</span><strong>{{ appUpdate.channel === 'stable' ? '稳定版' : '测试版（含 prerelease）' }}</strong></div>
+          <div><span>检查状态</span><strong>{{ updateStatusText }}</strong></div>
+          <div v-if="appUpdate.available"><span>最新版本</span><strong>{{ appUpdate.latestVersionName }}（{{ appUpdate.latestVersionCode }}）</strong></div>
+        </div>
+        <label>更新渠道<select :value="appUpdate.channel" :disabled="updateBusy" @change="changeUpdateChannel"><option value="stable">稳定版</option><option value="beta">测试版（含 prerelease）</option></select></label>
+        <progress v-if="appUpdate.status === 'running' || appUpdate.status === 'pending'" class="update-progress" max="100" :value="appUpdate.progress">{{ appUpdate.progress }}%</progress>
+        <p v-if="appUpdate.error" class="inline-message warning">{{ appUpdate.error }}</p>
+        <div class="sound-options update-actions">
+          <button class="ghost" :disabled="updateBusy" @click="checkForAppUpdate(true)">检查更新</button>
+          <button v-if="appUpdate.available" :disabled="updateBusy || appUpdate.status === 'running' || appUpdate.status === 'pending'" @click="downloadAndInstallUpdate">{{ updateActionText }}</button>
+        </div>
+        <p class="sound-note">应用会每 12 小时自动检查一次。Android 仍会显示系统安装确认；首次使用还需允许“安装未知应用”。</p>
+      </section>
+
       <p v-if="state.message && (state.activePage === 'water' || state.activePage === 'screen')" class="snackbar">{{ state.message }}</p>
       <p v-else-if="state.message" class="message">{{ state.message }}</p>
       <p v-if="isSettingsPage" class="hint">如使用 MIUI/HyperOS，请在权限配置中允许通知、自启动、锁屏显示与不限制省电。</p>
     </main>
+
+    <div v-if="shouldShowUpdateDialog" class="update-overlay" role="dialog" aria-modal="true" aria-label="发现应用更新">
+      <section class="update-dialog">
+        <div class="update-dialog-icon">⬆</div>
+        <h2>发现新版本 {{ appUpdate.latestVersionName }}</h2>
+        <p>{{ appUpdate.prerelease ? '这是测试版更新。' : '这是稳定版更新。' }} {{ formattedUpdateSize ? `安装包约 ${formattedUpdateSize}。` : '' }}</p>
+        <ul v-if="appUpdate.releaseNotes?.length"><li v-for="note in appUpdate.releaseNotes" :key="note">{{ note }}</li></ul>
+        <progress v-if="appUpdate.status === 'running' || appUpdate.status === 'pending'" class="update-progress" max="100" :value="appUpdate.progress">{{ appUpdate.progress }}%</progress>
+        <p v-if="appUpdate.error" class="inline-message warning">{{ appUpdate.error }}</p>
+        <div class="update-dialog-actions">
+          <button v-if="!appUpdate.mandatory" class="ghost" :disabled="updateBusy" @click="dismissUpdateDialog">稍后</button>
+          <button :disabled="updateBusy || appUpdate.status === 'running' || appUpdate.status === 'pending'" @click="downloadAndInstallUpdate">{{ updateActionText }}</button>
+        </div>
+      </section>
+    </div>
 
     <nav v-if="!isSettingsPage && !isPermissionGuidePage && !isWaterFlowPage" class="bottom-tabs" aria-label="主功能切换">
       <button :class="{ active: state.activePage === 'water' || state.activePage === 'waterSettings' }" @click="switchPage('water')">💧<span>喝水提醒</span></button>
