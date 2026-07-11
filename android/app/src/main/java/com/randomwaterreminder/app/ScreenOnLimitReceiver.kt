@@ -6,10 +6,10 @@ import android.content.Intent
 
 class ScreenOnLimitReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        runCatching {
-            ScreenStateTracker.evaluateAndAlert(context.applicationContext, forceDue = true)
-        }.onFailure {
-            ScreenOnLimitAlarmScheduler.reschedule(context.applicationContext, forceRecalculate = true)
+        val appContext = context.applicationContext
+        ReceiverWork.run(this, "ScreenOnLimitReceiver") {
+            runCatching { ScreenStateTracker.evaluateAndAlert(appContext, forceDue = true) }
+                .onFailure { ScreenOnLimitAlarmScheduler.reschedule(appContext, forceRecalculate = true) }
         }
     }
 }

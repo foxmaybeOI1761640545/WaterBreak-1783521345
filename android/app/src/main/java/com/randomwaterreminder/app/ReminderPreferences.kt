@@ -12,23 +12,24 @@ object ReminderPreferences {
         val legacySoundName = p.getString("customSoundName", "") ?: ""
         return ReminderConfig(
             enabled = p.getBoolean("enabled", false),
-            startHour = p.getInt("startHour", 8),
-            startMinute = p.getInt("startMinute", 0),
-            endHour = p.getInt("endHour", 22),
-            endMinute = p.getInt("endMinute", 0),
-            minIntervalMinutes = p.getInt("minIntervalMinutes", 60),
-            maxIntervalMinutes = p.getInt("maxIntervalMinutes", 120),
+            startHour = p.getInt("startHour", 6),
+            startMinute = p.getInt("startMinute", 35),
+            endHour = p.getInt("endHour", 23),
+            endMinute = p.getInt("endMinute", 45),
+            minIntervalMinutes = p.getInt("minIntervalMinutes", 35),
+            maxIntervalMinutes = p.getInt("maxIntervalMinutes", 45),
             nextReminderTime = p.getLong("nextReminderTime", 0L),
             waterNotificationTitle = p.getString("waterNotificationTitle", p.getString("notificationTitle", "该喝水啦")) ?: "该喝水啦",
-            waterNotificationText = p.getString("waterNotificationText", p.getString("notificationText", "起来喝一杯水，休息一下眼睛。")) ?: "起来喝一杯水，休息一下眼睛。",
+            waterNotificationText = p.getString("waterNotificationText", p.getString("notificationText", "稳健做人，认真做事。")) ?: "稳健做人，认真做事。",
             waterSoundMode = p.getString("waterSoundMode", legacySoundMode) ?: legacySoundMode,
             waterCustomSoundUri = p.getString("waterCustomSoundUri", legacySoundUri) ?: legacySoundUri,
             waterCustomSoundName = p.getString("waterCustomSoundName", legacySoundName) ?: legacySoundName,
             waterVolumePercent = p.getInt("waterVolumePercent", 100).coerceIn(0, 100),
-            screenLimitEnabled = p.getBoolean("screenLimitEnabled", p.getInt("screenOnLimitMinutes", 0) > 0),
-            screenOnLimitMinutes = p.getInt("screenOnLimitMinutes", 0),
+            waterRetryMinutes = p.getInt("waterRetryMinutes", 10).coerceIn(1, 180),
+            screenLimitEnabled = if (p.contains("screenLimitEnabled")) p.getBoolean("screenLimitEnabled", true) else if (p.contains("screenOnLimitMinutes")) p.getInt("screenOnLimitMinutes", 5) > 0 else true,
+            screenOnLimitMinutes = p.getInt("screenOnLimitMinutes", 5),
             requiredScreenOffMinutes = p.getInt("requiredScreenOffMinutes", 5),
-            cancelBeforeLockCount = p.getInt("cancelBeforeLockCount", 3),
+            cancelBeforeLockCount = p.getInt("cancelBeforeLockCount", 5),
             screenSoundMode = p.getString("screenSoundMode", legacySoundMode) ?: legacySoundMode,
             screenCustomSoundUri = p.getString("screenCustomSoundUri", legacySoundUri) ?: legacySoundUri,
             screenCustomSoundName = p.getString("screenCustomSoundName", legacySoundName) ?: legacySoundName,
@@ -52,6 +53,7 @@ object ReminderPreferences {
             .putString("waterCustomSoundUri", config.waterCustomSoundUri)
             .putString("waterCustomSoundName", config.waterCustomSoundName)
             .putInt("waterVolumePercent", config.waterVolumePercent.coerceIn(0, 100))
+            .putInt("waterRetryMinutes", config.waterRetryMinutes.coerceIn(1, 180))
             .putBoolean("screenLimitEnabled", config.screenLimitEnabled)
             .putInt("screenOnLimitMinutes", config.screenOnLimitMinutes)
             .putInt("requiredScreenOffMinutes", config.requiredScreenOffMinutes)

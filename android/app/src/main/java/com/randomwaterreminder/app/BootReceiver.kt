@@ -18,13 +18,16 @@ class BootReceiver : BroadcastReceiver() {
         if (action !in supported) return
 
         val appContext = context.applicationContext
-        NotificationHelper.ensureChannels(appContext)
-        WaterReminderScheduler.rescheduleIfEnabled(appContext)
-        ScreenStateTracker.refreshFromSystem(appContext)
-        ScreenOnLimitAlarmScheduler.reschedule(
-            appContext,
-            refreshState = false,
-            forceRecalculate = true,
-        )
+        ReceiverWork.run(this, "BootReceiver:$action") {
+            NotificationHelper.ensureChannels(appContext)
+            WaterReminderScheduler.rescheduleIfEnabled(appContext)
+            ScreenStateTracker.refreshFromSystem(appContext)
+            ScreenOnLimitAlarmScheduler.reschedule(
+                appContext,
+                refreshState = false,
+                forceRecalculate = true,
+            )
+            NotificationHelper.refreshStatusNotifications(appContext)
+        }
     }
 }

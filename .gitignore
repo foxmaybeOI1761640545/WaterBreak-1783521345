@@ -54,3 +54,5 @@ temp/
 .codex/skills/version-release/**/*.local.env
 .codex/skills/version-release/**/local-auth.env
 .codex/skills/version-release/**/auth.env
+release-secrets/
+release/

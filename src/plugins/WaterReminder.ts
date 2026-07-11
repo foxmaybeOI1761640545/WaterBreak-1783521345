@@ -2,7 +2,7 @@ import { registerPlugin } from '@capacitor/core'
 
 export type ReminderSoundMode = 'default' | 'custom'
 export type ReminderType = 'water' | 'screen_limit'
-export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown'
+export type PermissionValue = 'granted' | 'denied' | 'prompt' | 'unknown' | 'unavailable' | 'optional'
 
 export interface ReminderConfig {
   enabled: boolean
@@ -19,6 +19,8 @@ export interface ReminderConfig {
   waterCustomSoundUri?: string
   waterCustomSoundName?: string
   waterVolumePercent: number
+  waterRetryMinutes: number
+  waterConsecutiveNotDrank?: number
   screenLimitEnabled: boolean
   screenOnLimitMinutes: number
   requiredScreenOffMinutes: number
@@ -28,6 +30,13 @@ export interface ReminderConfig {
   screenCustomSoundUri?: string
   screenCustomSoundName?: string
   screenVolumePercent: number
+  screenCyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'blocked_admin' | 'grace'
+  screenCycleLimit?: number
+  screenCycleActiveSessionId?: string
+  screenCycleSessionStartedAt?: number
+  screenCycleId?: string
+  screenCycleStartedAt?: number
+  screenCycleUpdatedAt?: number
   waterAlarmScheduled?: boolean
   waterAlarmExact?: boolean
   waterAlarmReason?: string
@@ -55,6 +64,9 @@ export interface PermissionStatus {
   waterChannelImportance?: number
   screenChannelEnabled?: boolean
   screenChannelImportance?: number
+  deviceAdmin?: PermissionValue
+  batteryOptimization?: PermissionValue
+  manufacturerSettingsAvailable?: boolean
 }
 
 export interface ScreenStateStatus {
@@ -67,7 +79,63 @@ export interface ScreenStateStatus {
   restStartedAt?: number
   nextScreenCheckAt?: number
   trackingReliable?: boolean
+  cycleCancelCount?: number
+  cycleLimit?: number
+  cyclePhase?: 'idle' | 'alerting' | 'waiting_rest' | 'force_lock' | 'blocked_admin' | 'grace'
+  cycleActiveSessionId?: string
+  cycleSessionStartedAt?: number
+  cycleId?: string
+  cycleStartedAt?: number
+  cycleUpdatedAt?: number
+  updatedAt?: number
   trackingNote: string
+}
+
+export interface ScreenDashboardState extends ScreenStateStatus {
+  screenLimitEnabled: boolean
+  screenOnLimitMinutes: number
+  requiredScreenOffMinutes: number
+  cancelBeforeLockCount: number
+  screenSoundMode: ReminderSoundMode
+  screenCustomSoundName?: string
+  screenVolumePercent: number
+}
+
+export interface WaterCheckInRecord {
+  id: string
+  type: 'drank' | 'not_drank' | 'state_check'
+  timestamp: number
+  amountMl?: number
+  photoFileName?: string
+  consecutiveNotDrank?: number
+  entryMode?: 'volume' | 'container'
+  containerId?: string
+  containerName?: string
+  emptyWeightGrams?: number
+  totalWeightGrams?: number
+  drinkType?: string
+  description?: string
+}
+
+export interface WaterCheckInHistory {
+  consecutiveNotDrank: number
+  requiresStatePhoto: boolean
+  todayTotalMl: number
+  todayRecordCount: number
+  lastDrankAt: number
+  records: WaterCheckInRecord[]
+}
+
+export interface WaterContainer {
+  id: string
+  name: string
+  emptyWeightGrams: number
+}
+
+export interface LocalImagePayload {
+  sessionId: string
+  mimeType: string
+  dataBase64: string
 }
 
 export interface AlertResult {
@@ -94,6 +162,7 @@ export interface CustomSoundPayload {
 }
 
 export interface ReminderTypePayload { type: ReminderType }
+export interface SettingsLaunchResult { opened: boolean; target?: string; fallback?: boolean; reason?: string }
 
 export interface WaterReminderPlugin {
   startReminder(config: ReminderConfig): Promise<ReminderStatus>
@@ -103,13 +172,29 @@ export interface WaterReminderPlugin {
   saveCustomSound(payload: CustomSoundPayload): Promise<ReminderStatus>
   useDefaultSound(payload?: ReminderTypePayload): Promise<ReminderStatus>
   getScreenState(): Promise<ScreenStateStatus>
+  getScreenDashboardState(): Promise<ScreenDashboardState>
+  getWaterCheckInHistory(payload?: { limit?: number }): Promise<WaterCheckInHistory>
+  getWaterContainers(): Promise<{ containers: WaterContainer[] }>
+  saveWaterContainer(payload: { id?: string; name: string; emptyWeightGrams: number }): Promise<{ containers: WaterContainer[] }>
+  deleteWaterContainer(payload: { id: string }): Promise<{ deleted: boolean; containers: WaterContainer[] }>
+  dismissWaterAlertUi(): Promise<void>
+  saveWaterDrankRecord(payload: LocalImagePayload & { amountMl: number; entryMode: 'volume' | 'container'; drinkType: string; description?: string; containerId?: string; containerName?: string; emptyWeightGrams?: number; totalWeightGrams?: number }): Promise<WaterCheckInHistory>
+  recordWaterNotDrank(payload: { sessionId: string }): Promise<{ accepted: boolean; consecutiveCount: number; requiresStatePhoto: boolean; retryMinutes: number }>
+  saveWaterStateCheck(payload: LocalImagePayload): Promise<WaterCheckInHistory>
+  getWaterPhoto(payload: { photoFileName: string }): Promise<{ mimeType: string; dataBase64: string }>
+  shareWaterDataExport(): Promise<{ opened: boolean; fileName: string }>
+  importWaterData(payload: { dataBase64: string }): Promise<{ history: WaterCheckInHistory; containers: WaterContainer[] }>
   requestNotificationPermission(): Promise<PermissionStatus>
   getPermissionStatus(): Promise<PermissionStatus>
-  openExactAlarmSettings(): Promise<{ opened: boolean }>
-  openNotificationSettings(payload?: ReminderTypePayload): Promise<{ opened: boolean }>
-  openOverlaySettings(): Promise<{ opened: boolean }>
-  openUsageAccessSettings(): Promise<{ opened: boolean }>
-  openFullScreenIntentSettings(): Promise<{ opened: boolean }>
+  openExactAlarmSettings(): Promise<SettingsLaunchResult>
+  openNotificationSettings(payload?: ReminderTypePayload): Promise<SettingsLaunchResult>
+  openOverlaySettings(): Promise<SettingsLaunchResult>
+  openUsageAccessSettings(): Promise<SettingsLaunchResult>
+  openFullScreenIntentSettings(): Promise<SettingsLaunchResult>
+  openDeviceAdminSettings(): Promise<SettingsLaunchResult>
+  openAppDetailsSettings(): Promise<SettingsLaunchResult>
+  openManufacturerPermissionSettings(payload?: { target?: string }): Promise<SettingsLaunchResult>
+  openBatteryOptimizationSettings(): Promise<SettingsLaunchResult>
 }
 
 export const WaterReminder = registerPlugin<WaterReminderPlugin>('WaterReminder')

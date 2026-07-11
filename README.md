@@ -1,4 +1,4 @@
-# Random Water Reminder
+# 水息守护
 
 使用 Vue 3、Vite、TypeScript、Capacitor Android 与 Kotlin Capacitor Plugin 开发的 Android 喝水及亮屏超时提醒应用。
 
@@ -11,6 +11,7 @@
 - 固定喝水、亮屏提醒通知渠道，自动清理旧版重复渠道。
 - 开机、应用升级、时间/时区变化及精确闹钟授权变化后重新安排提醒。
 - Android 系统返回键或侧滑返回会先退出设置页，根页面才最小化应用。
+- 自动检查 GitHub Release，在应用内下载、校验并打开系统安装确认页。
 
 ## 需要的系统权限
 
@@ -41,4 +42,7 @@ cd android && gradle assembleDebug
 ## GitHub Actions
 
 - `.github/workflows/android-build.yml`：构建 Debug APK 并上传 artifact。
-- `.github/workflows/android-release.yml`：构建签名 Release APK 并发布 GitHub Release。
+- `.github/workflows/android-release.yml`：使用固定签名构建 Release APK；`main/master` 发布正式版，`work` 与内部 PR 发布 prerelease。
+- 发布版本从源码 `v1.0.6` 开始全局递增，下一个版本为 `v1.0.7`。
+- 详细配置见 [`docs/BUILD_RELEASE_UPDATE.md`](docs/BUILD_RELEASE_UPDATE.md)。
+- 本次交付的固定签名材料位于被 Git 忽略的 `release-secrets/`，配置完成后请单独安全备份并从工作目录删除。

@@ -29,10 +29,12 @@ data class ScreenRestDecision(
 )
 
 object ScreenRestStateMachine {
+    private const val FORCE_LOCK_RECHECK_INTERVAL_MS = 30_000L
+
     fun evaluate(snapshot: ScreenRestSnapshot): ScreenRestDecision {
         val onLimitMillis = snapshot.screenOnLimitMinutes.coerceAtLeast(0) * 60_000L
         val offRequiredMillis = snapshot.requiredScreenOffMinutes.coerceAtLeast(1) * 60_000L
-        val mustLock = snapshot.forceLockActive || snapshot.cancelCount >= snapshot.cancelBeforeLockCount.coerceAtLeast(1)
+        val mustLock = snapshot.forceLockActive
         if (snapshot.state == "off") {
             if (!snapshot.restRequired && !mustLock) return ScreenRestDecision(false, 0L, 0L, false, false)
             val started = max(snapshot.restStartedAt, snapshot.currentStateSince).takeIf { it > 0L } ?: snapshot.now
@@ -43,7 +45,7 @@ object ScreenRestStateMachine {
         if (snapshot.state != "on" || snapshot.screenOnLimitMinutes <= 0 || snapshot.lastScreenOn <= 0L) {
             return ScreenRestDecision(snapshot.restRequired || mustLock, 0L, 0L, false, false, mustLock, mustLock && snapshot.state == "on")
         }
-        if (mustLock) return ScreenRestDecision(true, 0L, snapshot.now + ReminderLockHelper.MIN_LOCK_RETRY_INTERVAL_MS, true, false, true, true)
+        if (mustLock) return ScreenRestDecision(true, 0L, snapshot.now + FORCE_LOCK_RECHECK_INTERVAL_MS, false, false, true, true)
         val dueAt = max(snapshot.lastScreenOn + onLimitMillis, snapshot.nextAllowedAlertAt)
         return if (snapshot.now >= dueAt) ScreenRestDecision(true, 0L, 0L, true, false, false, false)
         else ScreenRestDecision(snapshot.restRequired, 0L, dueAt, false, false, false, false)
