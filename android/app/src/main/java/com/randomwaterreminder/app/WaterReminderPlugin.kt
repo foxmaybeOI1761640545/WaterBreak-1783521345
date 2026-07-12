@@ -336,7 +336,7 @@ class WaterReminderPlugin : Plugin() {
         val updated = WaterCheckInStore.updateDescription(context, id, description)
         call.resolve(JSObject.fromJSONObject(JSONObject()
             .put("updated", updated)
-            .put("history", WaterCheckInStore.snapshot(context, 100))))
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
     }
 
     @PluginMethod
@@ -344,7 +344,7 @@ class WaterReminderPlugin : Plugin() {
         val deleted = WaterCheckInStore.softDelete(context, call.getString("id").orEmpty())
         call.resolve(JSObject.fromJSONObject(JSONObject()
             .put("deleted", deleted)
-            .put("history", WaterCheckInStore.snapshot(context, 100))))
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
     }
 
     @PluginMethod
@@ -352,7 +352,7 @@ class WaterReminderPlugin : Plugin() {
         val restored = WaterCheckInStore.restore(context, call.getString("id").orEmpty())
         call.resolve(JSObject.fromJSONObject(JSONObject()
             .put("restored", restored)
-            .put("history", WaterCheckInStore.snapshot(context, 100))))
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
     }
 
     @PluginMethod

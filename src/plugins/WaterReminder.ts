@@ -87,6 +87,10 @@ export interface ScreenStateStatus {
   cycleId?: string
   cycleStartedAt?: number
   cycleUpdatedAt?: number
+  todayScreenAlertCount?: number
+  todayScreenOnCount?: number
+  todayScreenOnDurationMs?: number
+  lastScreenAlertAt?: number
   updatedAt?: number
   trackingNote: string
 }
