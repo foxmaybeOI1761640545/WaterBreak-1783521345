@@ -82,6 +82,7 @@ const updateBusy = ref(false)
 const updatePanelOpen = ref(false)
 const githubTestBusy = ref(false)
 const githubTestResult = reactive({ tested: false, ok: false, message: '', latencyMs: 0 })
+const githubConnectionToast = ref('')
 const installAfterDownload = ref(false)
 const retryInstallOnResume = ref(false)
 const photoPreviewOpen = ref(false)
@@ -201,6 +202,7 @@ let appStateHandle: PluginListenerHandle | undefined
 let appUrlOpenHandle: PluginListenerHandle | undefined
 let appUpdateHandle: PluginListenerHandle | undefined
 let updateCheckTimer: number | undefined
+let githubConnectionToastTimer: number | undefined
 let messageTimer: number | undefined
 let autoSaveTimer: number | undefined
 let resumeTimer: number | undefined
@@ -898,7 +900,13 @@ function mergeUpdateState(next: UpdateState) {
 }
 function openUpdatePanel() {
   updateDialogDismissed.value = true
+  githubConnectionToast.value = ''
   updatePanelOpen.value = true
+}
+function showGithubConnectionToast(ok: boolean) {
+  githubConnectionToast.value = ok ? '连接成功' : '连接失败'
+  if (githubConnectionToastTimer) window.clearTimeout(githubConnectionToastTimer)
+  githubConnectionToastTimer = window.setTimeout(() => { githubConnectionToast.value = '' }, 3000)
 }
 async function testGithubConnection() {
   githubTestBusy.value = true
@@ -906,8 +914,10 @@ async function testGithubConnection() {
   try {
     const result = await AppUpdate.testGithubConnection()
     Object.assign(githubTestResult, { tested: true, ...result })
+    showGithubConnectionToast(result.ok)
   } catch (error) {
     Object.assign(githubTestResult, { tested: true, ok: false, latencyMs: 0, message: error instanceof Error ? error.message : '连接测试失败，请检查网络后重试' })
+    showGithubConnectionToast(false)
   } finally { githubTestBusy.value = false }
 }
 async function loadUpdateState() {
@@ -921,6 +931,7 @@ async function checkForAppUpdate(manual = true) {
       const connection = await AppUpdate.testGithubConnection()
       Object.assign(githubTestResult, { tested: true, ...connection })
       if (!connection.ok) {
+        showGithubConnectionToast(false)
         setUserMessage(connection.message, 5000)
         return
       }
@@ -1062,6 +1073,7 @@ onUnmounted(() => {
   appUrlOpenHandle?.remove()
   appUpdateHandle?.remove()
   if (updateCheckTimer) window.clearTimeout(updateCheckTimer)
+  if (githubConnectionToastTimer) window.clearTimeout(githubConnectionToastTimer)
   if (messageTimer) window.clearTimeout(messageTimer)
   if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
   if (resumeTimer) window.clearTimeout(resumeTimer)
@@ -1349,14 +1361,14 @@ onUnmounted(() => {
         <label>更新渠道<select :value="appUpdate.channel" :disabled="updateBusy" @change="changeUpdateChannel"><option value="stable">稳定版</option><option value="beta">测试版（含 Pre-release）</option></select></label>
         <progress v-if="appUpdate.status === 'running' || appUpdate.status === 'pending'" class="update-progress" max="100" :value="appUpdate.progress">{{ appUpdate.progress }}%</progress>
         <p v-if="appUpdate.error" class="inline-message warning">{{ appUpdate.error }}</p>
-        <p v-if="githubTestResult.tested" class="inline-message" :class="{ warning: !githubTestResult.ok }">{{ githubTestResult.message }}<template v-if="githubTestResult.latencyMs">（{{ githubTestResult.latencyMs }} ms）</template></p>
         <div class="update-panel-actions">
-          <button class="ghost" :disabled="githubTestBusy" @click="testGithubConnection">{{ githubTestBusy ? '正在测试…' : '测试 GitHub 连接' }}</button>
+          <button class="ghost" :disabled="githubTestBusy" :aria-busy="githubTestBusy" @click="testGithubConnection">测试连接</button>
           <button class="ghost" :disabled="updateBusy" @click="checkForAppUpdate(true)">{{ updateBusy ? '正在检查…' : '检查更新' }}</button>
           <button v-if="appUpdate.available" :disabled="updateBusy || appUpdate.status === 'running' || appUpdate.status === 'pending'" @click="downloadAndInstallUpdate">{{ updateActionText }}</button>
         </div>
         <p class="sound-note">应用每 12 小时自动检查一次。若连接测试失败，请切换网络或检查代理后再更新；安装前仍会显示 Android 系统确认页。</p>
       </section>
+      <p v-if="githubConnectionToast" class="connection-toast" :class="{ failed: githubConnectionToast === '连接失败' }" role="status" aria-live="polite">{{ githubConnectionToast }}</p>
     </div>
 
     <div v-if="shouldShowUpdateDialog" class="update-overlay" role="dialog" aria-modal="true" aria-label="发现应用更新">
