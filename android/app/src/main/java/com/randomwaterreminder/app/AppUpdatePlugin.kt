@@ -115,6 +115,44 @@ class AppUpdatePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun testGithubConnection(call: PluginCall) {
+        val repository = BuildConfig.UPDATE_REPOSITORY.trim()
+        if (!repository.matches(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))) {
+            call.resolve(JSObject().apply {
+                put("ok", false)
+                put("message", "当前安装包未配置 GitHub 更新仓库")
+                put("latencyMs", 0)
+                put("repository", repository)
+            })
+            return
+        }
+        Thread {
+            val startedAt = System.currentTimeMillis()
+            runCatching {
+                val response = fetchJsonObject("https://api.github.com/repos/$repository")
+                check(response.optString("full_name").equals(repository, ignoreCase = true)) { "GitHub 返回了意外的仓库信息" }
+            }.fold(
+                onSuccess = {
+                    call.resolve(JSObject().apply {
+                        put("ok", true)
+                        put("message", "GitHub 连接正常，可以检查和下载更新")
+                        put("latencyMs", System.currentTimeMillis() - startedAt)
+                        put("repository", repository)
+                    })
+                },
+                onFailure = { error ->
+                    call.resolve(JSObject().apply {
+                        put("ok", false)
+                        put("message", "无法连接 GitHub：${error.message ?: "网络请求失败"}。请切换网络、检查代理或稍后重试。")
+                        put("latencyMs", System.currentTimeMillis() - startedAt)
+                        put("repository", repository)
+                    })
+                },
+            )
+        }.start()
+    }
+
+    @PluginMethod
     fun downloadUpdate(call: PluginCall) {
         val manifest = readManifest()
         if (manifest == null || manifest.optLong("versionCode", 0L) <= currentVersionCode()) {

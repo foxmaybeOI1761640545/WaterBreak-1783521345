@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
+import java.util.Calendar
 import kotlin.math.max
 
 object ScreenStateTracker {
@@ -22,6 +23,11 @@ object ScreenStateTracker {
     private const val KEY_LAST_OBSERVED_AT = "lastObservedAt"
     private const val KEY_GRACE_UNTIL = "emergencyGraceUntil"
     private const val KEY_RAPID_ON_TIMES = "rapidScreenOnTimes"
+    private const val KEY_METRICS_DAY_START = "metricsDayStart"
+    private const val KEY_TODAY_ALERT_COUNT = "todayAlertCount"
+    private const val KEY_TODAY_SCREEN_ON_COUNT = "todayScreenOnCount"
+    private const val KEY_TODAY_SCREEN_ON_DURATION = "todayScreenOnDuration"
+    private const val KEY_LAST_SCREEN_ALERT_AT = "lastScreenAlertAt"
     private const val MAX_UNVERIFIED_GAP = 10L * 60L * 1000L
     private const val MAX_EVENT_LOOKBACK = 7L * 24L * 60L * 60L * 1000L
     private const val MAX_CLOCK_SKEW = 60_000L
@@ -71,6 +77,11 @@ object ScreenStateTracker {
         val lastScreenOff = prefs.getLong(KEY_LAST_SCREEN_OFF, 0L)
         val now = System.currentTimeMillis()
         val usagePermission = ScreenUsageEventReader.hasPermission(context)
+        val dayStart = prepareTodayMetrics(prefs, now)
+        val usageMetrics = ScreenUsageEventReader.todayMetrics(appContext, now)
+        val storedOnCount = prefs.getInt(KEY_TODAY_SCREEN_ON_COUNT, 0).coerceAtLeast(0)
+        val storedOnDuration = prefs.getLong(KEY_TODAY_SCREEN_ON_DURATION, 0L).coerceAtLeast(0L)
+        val currentFallbackDuration = if (state == "on" && stateSince > 0L) (now - max(stateSince, dayStart)).coerceAtLeast(0L) else 0L
         val cycle = cycleSnapshot(appContext, ReminderPreferences.read(appContext), prefs, now)
         return JSObject().apply {
             put("currentScreenState", state)
@@ -89,6 +100,10 @@ object ScreenStateTracker {
             put("cycleId", cycle.cycleId)
             put("cycleStartedAt", cycle.cycleStartedAt)
             put("cycleUpdatedAt", cycle.cycleUpdatedAt)
+            put("todayScreenAlertCount", prefs.getInt(KEY_TODAY_ALERT_COUNT, 0).coerceAtLeast(0))
+            put("todayScreenOnCount", usageMetrics?.screenOnCount ?: max(storedOnCount, if (state == "on") 1 else 0))
+            put("todayScreenOnDurationMs", usageMetrics?.screenOnDurationMs ?: storedOnDuration + currentFallbackDuration)
+            put("lastScreenAlertAt", prefs.getLong(KEY_LAST_SCREEN_ALERT_AT, 0L))
             put("updatedAt", now)
             put("trackingReliable", usagePermission)
             put(
@@ -245,6 +260,7 @@ object ScreenStateTracker {
             val text = "已经连续亮屏 ${config.screenOnLimitMinutes} 分钟以上，请连续息屏 ${config.requiredScreenOffMinutes} 分钟休息。"
             val sessionId = "screen-${now}"
             AlertCoordinator.alert(appContext, ReminderType.SCREEN_LIMIT, title, text, config, sessionId = sessionId)
+            recordTodayAlert(prefs, now)
         }
 
         if (decision.shouldForceLock) {
@@ -357,6 +373,7 @@ object ScreenStateTracker {
         val previousState = prefs.getString(KEY_CURRENT_STATE, "unknown") ?: "unknown"
         val previousSince = prefs.getLong(KEY_STATE_SINCE, 0L)
         val safeTimestamp = max(timestamp, if (previousState == state) previousSince else 0L)
+        updateTodayScreenMetrics(prefs, previousState, previousSince, state, safeTimestamp)
         if (previousState == "off" && state == "on" && ReminderLockHelper.forceLockActive(context)) {
             val recent = prefs.getString(KEY_RAPID_ON_TIMES, "").orEmpty().split(',').mapNotNull { it.toLongOrNull() }.filter { it in (safeTimestamp - RapidScreenOnGraceState.RAPID_SCREEN_ON_WINDOW_MS)..safeTimestamp } + safeTimestamp
             if (recent.size >= RapidScreenOnGraceState.RAPID_SCREEN_ON_THRESHOLD) {
@@ -386,5 +403,55 @@ object ScreenStateTracker {
                 if (wasRestRequired) putLong(KEY_REST_STARTED_AT, safeTimestamp)
             }
         }.apply()
+    }
+
+    private fun dayStart(timestamp: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = timestamp
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    private fun prepareTodayMetrics(prefs: android.content.SharedPreferences, now: Long): Long {
+        val start = dayStart(now)
+        if (prefs.getLong(KEY_METRICS_DAY_START, 0L) != start) {
+            prefs.edit()
+                .putLong(KEY_METRICS_DAY_START, start)
+                .putInt(KEY_TODAY_ALERT_COUNT, 0)
+                .putInt(KEY_TODAY_SCREEN_ON_COUNT, 0)
+                .putLong(KEY_TODAY_SCREEN_ON_DURATION, 0L)
+                .commit()
+        }
+        return start
+    }
+
+    private fun recordTodayAlert(prefs: android.content.SharedPreferences, now: Long) {
+        prepareTodayMetrics(prefs, now)
+        prefs.edit()
+            .putInt(KEY_TODAY_ALERT_COUNT, prefs.getInt(KEY_TODAY_ALERT_COUNT, 0).coerceAtLeast(0) + 1)
+            .putLong(KEY_LAST_SCREEN_ALERT_AT, now)
+            .apply()
+    }
+
+    private fun updateTodayScreenMetrics(
+        prefs: android.content.SharedPreferences,
+        previousState: String,
+        previousSince: Long,
+        nextState: String,
+        timestamp: Long,
+    ) {
+        val start = prepareTodayMetrics(prefs, timestamp)
+        var count = prefs.getInt(KEY_TODAY_SCREEN_ON_COUNT, 0).coerceAtLeast(0)
+        var duration = prefs.getLong(KEY_TODAY_SCREEN_ON_DURATION, 0L).coerceAtLeast(0L)
+        if (previousState == "on" && previousSince > 0L && nextState != "on") {
+            duration += (timestamp - max(previousSince, start)).coerceAtLeast(0L)
+            if (count == 0) count = 1
+        }
+        if (previousState != "on" && nextState == "on") count += 1
+        prefs.edit()
+            .putInt(KEY_TODAY_SCREEN_ON_COUNT, count)
+            .putLong(KEY_TODAY_SCREEN_ON_DURATION, duration)
+            .apply()
     }
 }

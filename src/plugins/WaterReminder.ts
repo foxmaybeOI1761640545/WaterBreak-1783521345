@@ -87,6 +87,10 @@ export interface ScreenStateStatus {
   cycleId?: string
   cycleStartedAt?: number
   cycleUpdatedAt?: number
+  todayScreenAlertCount?: number
+  todayScreenOnCount?: number
+  todayScreenOnDurationMs?: number
+  lastScreenAlertAt?: number
   updatedAt?: number
   trackingNote: string
 }
@@ -115,6 +119,7 @@ export interface WaterCheckInRecord {
   totalWeightGrams?: number
   drinkType?: string
   description?: string
+  deletedAt?: number
 }
 
 export interface WaterCheckInHistory {
@@ -173,7 +178,7 @@ export interface WaterReminderPlugin {
   useDefaultSound(payload?: ReminderTypePayload): Promise<ReminderStatus>
   getScreenState(): Promise<ScreenStateStatus>
   getScreenDashboardState(): Promise<ScreenDashboardState>
-  getWaterCheckInHistory(payload?: { limit?: number }): Promise<WaterCheckInHistory>
+  getWaterCheckInHistory(payload?: { limit?: number; deletedOnly?: boolean }): Promise<WaterCheckInHistory>
   getWaterContainers(): Promise<{ containers: WaterContainer[] }>
   saveWaterContainer(payload: { id?: string; name: string; emptyWeightGrams: number }): Promise<{ containers: WaterContainer[] }>
   deleteWaterContainer(payload: { id: string }): Promise<{ deleted: boolean; containers: WaterContainer[] }>
@@ -181,6 +186,9 @@ export interface WaterReminderPlugin {
   saveWaterDrankRecord(payload: LocalImagePayload & { amountMl: number; entryMode: 'volume' | 'container'; drinkType: string; description?: string; containerId?: string; containerName?: string; emptyWeightGrams?: number; totalWeightGrams?: number }): Promise<WaterCheckInHistory>
   recordWaterNotDrank(payload: { sessionId: string }): Promise<{ accepted: boolean; consecutiveCount: number; requiresStatePhoto: boolean; retryMinutes: number }>
   saveWaterStateCheck(payload: LocalImagePayload): Promise<WaterCheckInHistory>
+  updateWaterRecordDescription(payload: { id: string; description: string }): Promise<{ updated: boolean; history: WaterCheckInHistory }>
+  deleteWaterRecord(payload: { id: string }): Promise<{ deleted: boolean; history: WaterCheckInHistory }>
+  restoreWaterRecord(payload: { id: string }): Promise<{ restored: boolean; history: WaterCheckInHistory }>
   getWaterPhoto(payload: { photoFileName: string }): Promise<{ mimeType: string; dataBase64: string }>
   shareWaterDataExport(): Promise<{ opened: boolean; fileName: string }>
   importWaterData(payload: { dataBase64: string }): Promise<{ history: WaterCheckInHistory; containers: WaterContainer[] }>
