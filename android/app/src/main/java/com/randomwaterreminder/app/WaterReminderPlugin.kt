@@ -220,7 +220,11 @@ class WaterReminderPlugin : Plugin() {
 
     @PluginMethod
     fun getWaterCheckInHistory(call: PluginCall) {
-        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context, call.getInt("limit", 20) ?: 20)))
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(
+            context,
+            call.getInt("limit", 20) ?: 20,
+            call.getBoolean("deletedOnly", false) ?: false,
+        )))
     }
 
     @PluginMethod
@@ -277,6 +281,13 @@ class WaterReminderPlugin : Plugin() {
             call.reject("喝水记录保存失败或本次提醒已经处理")
             return
         }
+        if (sessionId.isBlank()) {
+            val config = ReminderPreferences.read(context)
+            if (config.enabled) {
+                val next = WaterReminderScheduler.calculateNextReminderTime(config, System.currentTimeMillis())
+                WaterReminderScheduler.scheduleNextReminder(context, next)
+            }
+        }
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
     }
 
@@ -312,6 +323,36 @@ class WaterReminderPlugin : Plugin() {
             System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
         )
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
+    }
+
+    @PluginMethod
+    fun updateWaterRecordDescription(call: PluginCall) {
+        val id = call.getString("id").orEmpty()
+        val description = call.getString("description").orEmpty()
+        if (description.length > 500) {
+            call.reject("喝水说明不能超过 500 个字符")
+            return
+        }
+        val updated = WaterCheckInStore.updateDescription(context, id, description)
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("updated", updated)
+            .put("history", WaterCheckInStore.snapshot(context, 100))))
+    }
+
+    @PluginMethod
+    fun deleteWaterRecord(call: PluginCall) {
+        val deleted = WaterCheckInStore.softDelete(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("deleted", deleted)
+            .put("history", WaterCheckInStore.snapshot(context, 100))))
+    }
+
+    @PluginMethod
+    fun restoreWaterRecord(call: PluginCall) {
+        val restored = WaterCheckInStore.restore(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("restored", restored)
+            .put("history", WaterCheckInStore.snapshot(context, 100))))
     }
 
     @PluginMethod

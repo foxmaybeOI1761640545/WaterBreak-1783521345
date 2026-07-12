@@ -22,6 +22,7 @@ interface State {
   screenState: ScreenStateStatus | null
   screenDataStale: boolean
   waterHistory: WaterCheckInHistory
+  waterDeletedRecords: WaterCheckInRecord[]
   waterContainers: WaterContainer[]
   waterHistoryImages: Record<string, string>
   now: number
@@ -78,9 +79,15 @@ const appUpdate = reactive<UpdateState>({
 })
 const updateDialogDismissed = ref(false)
 const updateBusy = ref(false)
+const updatePanelOpen = ref(false)
+const githubTestBusy = ref(false)
+const githubTestResult = reactive({ tested: false, ok: false, message: '', latencyMs: 0 })
 const installAfterDownload = ref(false)
 const retryInstallOnResume = ref(false)
 const photoPreviewOpen = ref(false)
+const historyShowingTrash = ref(false)
+const editingRecordId = ref('')
+const editingDescription = ref('')
 
 const state = reactive<State>({
   loading: true,
@@ -91,6 +98,7 @@ const state = reactive<State>({
   screenState: null,
   screenDataStale: false,
   waterHistory: { consecutiveNotDrank: 0, requiresStatePhoto: false, todayTotalMl: 0, todayRecordCount: 0, lastDrankAt: 0, records: [] },
+  waterDeletedRecords: [],
   waterContainers: [],
   waterHistoryImages: {},
   now: Date.now(),
@@ -111,7 +119,7 @@ const waterCheckIn = reactive({
   sessionId: '',
   isTest: false,
   action: 'prompt' as 'prompt' | 'drank' | 'forced_state',
-  amountMode: 'volume' as WaterAmountMode,
+  amountMode: 'container' as WaterAmountMode,
   directMl: null as number | null,
   totalWeightGrams: null as number | null,
   containerId: '',
@@ -146,6 +154,7 @@ const screenCyclePhase = computed(() => state.screenState?.cyclePhase ?? state.s
 const screenCycleCount = computed(() => state.screenState?.cycleCancelCount ?? state.status.cancelCycleCount ?? 0)
 const screenCycleLimit = computed(() => state.screenState?.cycleLimit ?? state.status.screenCycleLimit ?? state.status.cancelBeforeLockCount ?? 1)
 const latestWaterRecord = computed(() => state.waterHistory.records[0])
+const displayedWaterHistory = computed(() => historyShowingTrash.value ? state.waterDeletedRecords : state.waterHistory.records)
 const todayWaterAverageMl = computed(() => state.waterHistory.todayRecordCount > 0 ? Math.round(state.waterHistory.todayTotalMl / state.waterHistory.todayRecordCount) : 0)
 const todayWaterDateText = computed(() => new Date(state.now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }))
 const lastDrankTimeText = computed(() => state.waterHistory.lastDrankAt ? new Date(state.waterHistory.lastDrankAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '暂无')
@@ -182,7 +191,7 @@ const updateStatusText = computed(() => {
   return '尚未检查更新'
 })
 const updateActionText = computed(() => appUpdate.status === 'downloaded' ? '安装更新' : appUpdate.status === 'running' || appUpdate.status === 'pending' ? `下载中 ${appUpdate.progress}%` : '下载并安装')
-const shouldShowUpdateDialog = computed(() => appUpdate.available && !updateDialogDismissed.value)
+const shouldShowUpdateDialog = computed(() => appUpdate.available && !updateDialogDismissed.value && !updatePanelOpen.value)
 const formattedUpdateSize = computed(() => appUpdate.size ? `${(appUpdate.size / 1024 / 1024).toFixed(1)} MB` : '')
 
 let ticker: number | undefined
@@ -234,7 +243,7 @@ function formatNextReminder(timestamp: number) {
 }
 function waterRecordText(record?: WaterCheckInRecord) {
   if (!record) return '暂无记录'
-  if (record.type === 'drank') return `${record.drinkType || '饮水'} · ${record.amountMl || 0} 毫升${record.entryMode === 'container' ? `（${record.containerName || '容器'}称重）` : ''}`
+  if (record.type === 'drank') return `${record.drinkType || '饮水'} · ${record.amountMl || 0} 毫升`
   if (record.type === 'state_check') return '已完成状态自拍验证'
   return `未喝（连续 ${record.consecutiveNotDrank || 1}/3 次）`
 }
@@ -302,6 +311,7 @@ function openSettings() {
 }
 function navigateBack() {
   if (photoPreviewOpen.value) { photoPreviewOpen.value = false; return }
+  if (updatePanelOpen.value) { updatePanelOpen.value = false; return }
   if (isWaterFlowPage.value) {
     if (state.activePage === 'waterCheckIn' && waterCheckIn.action === 'forced_state' && !waterCheckIn.isTest) {
       waterCheckIn.message = '连续三次未喝后，需要先完成状态自拍验证。'
@@ -685,7 +695,7 @@ function resetWaterCheckIn(sessionId = '', isTest = false, action: 'prompt' | 'd
   waterCheckIn.sessionId = sessionId
   waterCheckIn.isTest = isTest
   waterCheckIn.action = action
-  waterCheckIn.amountMode = 'volume'
+  waterCheckIn.amountMode = 'container'
   waterCheckIn.directMl = null
   waterCheckIn.totalWeightGrams = null
   waterCheckIn.drinkType = '白水'
@@ -750,6 +760,7 @@ async function submitWaterDrank() {
       mimeType: waterCheckIn.photoMimeType,
       dataBase64: waterCheckIn.photoBase64,
     })
+    await refreshStatus()
     setUserMessage(`已保存本次${waterCheckIn.drinkType} ${amount} 毫升及凭证照片`)
     switchPage('water')
   } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存喝水记录失败' }
@@ -786,8 +797,50 @@ async function submitWaterStateCheck() {
   finally { waterCheckIn.submitting = false }
 }
 async function openWaterHistory() {
-  state.waterHistory = await WaterReminder.getWaterCheckInHistory({ limit: 100 })
+  const [history, deleted] = await Promise.all([
+    WaterReminder.getWaterCheckInHistory({ limit: 100 }),
+    WaterReminder.getWaterCheckInHistory({ limit: 100, deletedOnly: true }),
+  ])
+  state.waterHistory = history
+  state.waterDeletedRecords = deleted.records
+  historyShowingTrash.value = false
+  editingRecordId.value = ''
   switchPage('waterHistory', true)
+}
+function beginEditWaterRecord(record: WaterCheckInRecord) {
+  editingRecordId.value = record.id
+  editingDescription.value = record.description || ''
+}
+function cancelEditWaterRecord() { editingRecordId.value = ''; editingDescription.value = '' }
+async function saveWaterRecordDescription(record: WaterCheckInRecord) {
+  try {
+    const result = await WaterReminder.updateWaterRecordDescription({ id: record.id, description: editingDescription.value })
+    if (!result.updated) throw new Error('找不到这条本地记录')
+    state.waterHistory = result.history
+    cancelEditWaterRecord()
+    setUserMessage('喝水说明已保存')
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : '保存喝水说明失败', 4000) }
+}
+async function deleteWaterRecord(record: WaterCheckInRecord) {
+  if (!window.confirm('删除后记录会移入本地回收站，可随时恢复。确定删除吗？')) return
+  try {
+    const result = await WaterReminder.deleteWaterRecord({ id: record.id })
+    if (!result.deleted) throw new Error('找不到这条本地记录')
+    state.waterHistory = result.history
+    const deleted = await WaterReminder.getWaterCheckInHistory({ limit: 100, deletedOnly: true })
+    state.waterDeletedRecords = deleted.records
+    delete state.waterHistoryImages[record.id]
+    setUserMessage('记录已移入本地回收站')
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : '删除记录失败', 4000) }
+}
+async function restoreWaterRecord(record: WaterCheckInRecord) {
+  try {
+    const result = await WaterReminder.restoreWaterRecord({ id: record.id })
+    if (!result.restored) throw new Error('找不到这条本地记录')
+    state.waterHistory = result.history
+    state.waterDeletedRecords = state.waterDeletedRecords.filter(item => item.id !== record.id)
+    setUserMessage('记录已恢复')
+  } catch (error) { setUserMessage(error instanceof Error ? error.message : '恢复记录失败', 4000) }
 }
 async function toggleWaterHistoryPhoto(record: WaterCheckInRecord) {
   if (!record.photoFileName) return
@@ -843,6 +896,20 @@ function mergeUpdateState(next: UpdateState) {
   Object.assign(appUpdate, next)
   if (next.available && next.latestVersionCode !== previousLatest) updateDialogDismissed.value = false
 }
+function openUpdatePanel() {
+  updateDialogDismissed.value = true
+  updatePanelOpen.value = true
+}
+async function testGithubConnection() {
+  githubTestBusy.value = true
+  githubTestResult.tested = false
+  try {
+    const result = await AppUpdate.testGithubConnection()
+    Object.assign(githubTestResult, { tested: true, ...result })
+  } catch (error) {
+    Object.assign(githubTestResult, { tested: true, ok: false, latencyMs: 0, message: error instanceof Error ? error.message : '连接测试失败，请检查网络后重试' })
+  } finally { githubTestBusy.value = false }
+}
 async function loadUpdateState() {
   try { mergeUpdateState(await AppUpdate.getUpdateState()) }
   catch { /* Browser preview or an old native build may not expose the update plugin. */ }
@@ -850,6 +917,14 @@ async function loadUpdateState() {
 async function checkForAppUpdate(manual = true) {
   updateBusy.value = true
   try {
+    if (manual && (!githubTestResult.tested || !githubTestResult.ok)) {
+      const connection = await AppUpdate.testGithubConnection()
+      Object.assign(githubTestResult, { tested: true, ...connection })
+      if (!connection.ok) {
+        setUserMessage(connection.message, 5000)
+        return
+      }
+    }
     mergeUpdateState(await AppUpdate.checkForUpdate({ channel: appUpdate.channel, manual }))
     if (manual) setUserMessage(appUpdate.available ? `发现新版本 ${appUpdate.latestVersionName}` : '当前已是最新版本', 2600)
   } catch (error) {
@@ -1001,7 +1076,10 @@ onUnmounted(() => {
         <p class="eyebrow">水息守护</p>
         <h1>{{ pageTitle }}</h1>
       </div>
-      <button v-if="isSettingsPage || isPermissionGuidePage || isWaterFlowPage" class="icon-button" aria-label="返回" @click="closeSettings">←</button>
+      <div v-if="isSettingsPage || isPermissionGuidePage || isWaterFlowPage" class="top-actions">
+        <button v-if="isSettingsPage" class="icon-button update-entry-button" aria-label="应用更新" title="应用更新" @click="openUpdatePanel">⬆</button>
+        <button class="icon-button" aria-label="返回" @click="closeSettings">←</button>
+      </div>
       <button v-else class="icon-button" aria-label="打开设置" @click="openSettings">⚙</button>
     </header>
 
@@ -1128,14 +1206,26 @@ onUnmounted(() => {
           <div><span>今日饮水</span><strong>{{ state.waterHistory.todayTotalMl.toLocaleString('zh-CN') }} ml</strong></div>
           <div><span>今日次数</span><strong>{{ state.waterHistory.todayRecordCount }} 次</strong></div>
         </section>
-        <section v-if="!state.waterHistory.records.length" class="card empty-history"><span>💧</span><h2>还没有喝水记录</h2><p>完成一次饮水记录后，类型、说明和凭证照片会显示在这里。</p></section>
+        <div class="history-view-switch" role="tablist" aria-label="喝水记录分类">
+          <button class="ghost" :class="{ selected: !historyShowingTrash }" @click="historyShowingTrash = false">当前记录（{{ state.waterHistory.records.length }}）</button>
+          <button class="ghost" :class="{ selected: historyShowingTrash }" @click="historyShowingTrash = true">本地回收站（{{ state.waterDeletedRecords.length }}）</button>
+        </div>
+        <section v-if="!displayedWaterHistory.length" class="card empty-history"><span>{{ historyShowingTrash ? '♻️' : '💧' }}</span><h2>{{ historyShowingTrash ? '回收站为空' : '还没有喝水记录' }}</h2><p>{{ historyShowingTrash ? '软删除的记录会保留在本机，并可在这里恢复。' : '完成一次饮水记录后，类型、说明和凭证照片会显示在这里。' }}</p></section>
         <section v-else class="history-list">
-          <article v-for="record in state.waterHistory.records" :key="record.id" class="history-item">
+          <article v-for="record in displayedWaterHistory" :key="record.id" class="history-item" :class="{ deleted: historyShowingTrash }">
             <div class="history-marker" :class="record.type">{{ record.type === 'drank' ? '💧' : record.type === 'state_check' ? '📷' : '⏳' }}</div>
             <div class="history-content">
-              <div><strong>{{ waterRecordText(record) }}</strong><time>{{ formatTimestamp(record.timestamp) }}</time></div>
+              <div><strong>{{ waterRecordText(record) }}</strong><span class="history-meta"><time>{{ formatTimestamp(record.timestamp) }}</time><small v-if="record.entryMode === 'container'">{{ record.containerName || '容器' }}称重</small></span></div>
               <button v-if="record.photoFileName" class="ghost mini-button" @click="toggleWaterHistoryPhoto(record)">{{ state.waterHistoryImages[record.id] ? '收起图片' : '查看本地图片' }}</button>
-              <p v-if="record.description" class="history-description">{{ record.description }}</p>
+              <div v-if="editingRecordId === record.id" class="history-editor">
+                <label>喝水说明（可补充或清空）<textarea v-model="editingDescription" rows="3" maxlength="500" /></label>
+                <div><button @click="saveWaterRecordDescription(record)">保存说明</button><button class="ghost" @click="cancelEditWaterRecord">取消</button></div>
+              </div>
+              <p v-else-if="record.description" class="history-description">{{ record.description }}</p>
+              <div class="history-actions">
+                <template v-if="historyShowingTrash"><button class="ghost mini-button" @click="restoreWaterRecord(record)">恢复记录</button></template>
+                <template v-else><button v-if="record.type === 'drank'" class="ghost mini-button" @click="beginEditWaterRecord(record)">{{ record.description ? '修改说明' : '补充说明' }}</button><button class="danger-ghost mini-button" @click="deleteWaterRecord(record)">删除记录</button></template>
+              </div>
               <img v-if="state.waterHistoryImages[record.id]" :src="state.waterHistoryImages[record.id]" alt="喝水记录本地凭证照片" loading="lazy" />
             </div>
           </article>
@@ -1174,7 +1264,7 @@ onUnmounted(() => {
             <label>最小间隔（分钟）<input v-model.number="state.status.minIntervalMinutes" type="number" min="15" max="360" /></label>
             <label>最大间隔（分钟）<input v-model.number="state.status.maxIntervalMinutes" type="number" min="15" max="360" /></label>
             <label>未喝后再次提醒（分钟）<input v-model.number="state.status.waterRetryMinutes" type="number" min="1" max="180" /></label>
-            <label>下次提醒时间<input v-model="state.nextReminderInput" type="datetime-local" /><small class="field-note">清空后会自动设置为下一分钟</small></label>
+            <label class="next-reminder-field">下次提醒时间<input v-model="state.nextReminderInput" type="datetime-local" /><small class="field-note">清空后会自动设置为下一分钟</small></label>
           </div>
           <label>通知标题<input v-model="state.status.waterNotificationTitle" type="text" /></label>
           <label>通知内容<textarea v-model="state.status.waterNotificationText" rows="3" /></label>
@@ -1230,9 +1320,24 @@ onUnmounted(() => {
         <section class="actions"><button class="ghost" :disabled="state.loading || state.saving" @click="testNotification('screen_limit')">测试屏幕提醒</button><button class="ghost" :disabled="state.loading || state.saving" @click="() => refreshScreenDashboard(true)">刷新屏幕记录</button><button class="ghost" @click="openPermissionSettings('usage')">使用情况权限</button><button class="ghost" @click="openPermissionSettings('exact')">精确闹钟设置</button><button class="ghost" @click="openPermissionSettings('overlay')">悬浮窗设置</button><button class="ghost" @click="openPermissionSettings('fullScreen')">全屏提醒设置</button><button class="ghost" @click="openPermissionSettings('screenNotification')">屏幕通知设置</button></section>
       </template>
 
-      <section v-if="isSettingsPage" class="card form-card update-card">
+      <p v-if="state.message && (state.activePage === 'water' || state.activePage === 'screen')" class="snackbar" role="status" aria-live="polite">{{ state.message }}</p>
+      <p v-else-if="state.message" class="message" role="status" aria-live="polite">{{ state.message }}</p>
+      <p v-if="isSettingsPage" class="hint">如使用 MIUI/HyperOS，请在权限配置中允许通知、自启动、锁屏显示与不限制省电。</p>
+    </main>
+
+    <div v-if="photoPreviewOpen && waterCheckInPhotoPreview" class="photo-preview-overlay" role="dialog" aria-modal="true" aria-label="图片预览" @click.self="photoPreviewOpen = false">
+      <section class="photo-preview-dialog">
+        <button class="photo-preview-close" aria-label="关闭图片预览" @click="photoPreviewOpen = false">×</button>
+        <img :src="waterCheckInPhotoPreview" :alt="waterCheckIn.photoName || '所选图片预览'" />
+        <p>{{ waterCheckIn.photoName || '所选图片' }}</p>
+      </section>
+    </div>
+
+    <div v-if="updatePanelOpen" class="update-overlay" role="dialog" aria-modal="true" aria-label="应用更新" @click.self="updatePanelOpen = false">
+      <section class="update-dialog update-panel">
+        <button class="update-panel-close" aria-label="关闭应用更新" @click="updatePanelOpen = false">×</button>
         <div class="section-heading">
-          <div><h2>应用更新</h2><p>自动从当前 GitHub 仓库检查版本、下载 APK、校验哈希与签名，然后打开系统安装确认页。</p></div>
+          <div><h2>应用更新</h2><p>通过 GitHub Release 检查、校验并安装新版本。</p></div>
           <span class="status-pill" :class="{ enabled: appUpdate.available }">v{{ appUpdate.currentVersionName }}</span>
         </div>
         <div class="update-status-grid">
@@ -1244,23 +1349,13 @@ onUnmounted(() => {
         <label>更新渠道<select :value="appUpdate.channel" :disabled="updateBusy" @change="changeUpdateChannel"><option value="stable">稳定版</option><option value="beta">测试版（含 Pre-release）</option></select></label>
         <progress v-if="appUpdate.status === 'running' || appUpdate.status === 'pending'" class="update-progress" max="100" :value="appUpdate.progress">{{ appUpdate.progress }}%</progress>
         <p v-if="appUpdate.error" class="inline-message warning">{{ appUpdate.error }}</p>
-        <div class="sound-options update-actions">
-          <button class="ghost" :disabled="updateBusy" @click="checkForAppUpdate(true)">检查更新</button>
+        <p v-if="githubTestResult.tested" class="inline-message" :class="{ warning: !githubTestResult.ok }">{{ githubTestResult.message }}<template v-if="githubTestResult.latencyMs">（{{ githubTestResult.latencyMs }} ms）</template></p>
+        <div class="update-panel-actions">
+          <button class="ghost" :disabled="githubTestBusy" @click="testGithubConnection">{{ githubTestBusy ? '正在测试…' : '测试 GitHub 连接' }}</button>
+          <button class="ghost" :disabled="updateBusy" @click="checkForAppUpdate(true)">{{ updateBusy ? '正在检查…' : '检查更新' }}</button>
           <button v-if="appUpdate.available" :disabled="updateBusy || appUpdate.status === 'running' || appUpdate.status === 'pending'" @click="downloadAndInstallUpdate">{{ updateActionText }}</button>
         </div>
-        <p class="sound-note">应用会每 12 小时自动检查一次。Android 仍会显示系统安装确认；首次使用还需允许“安装未知应用”。</p>
-      </section>
-
-      <p v-if="state.message && (state.activePage === 'water' || state.activePage === 'screen')" class="snackbar" role="status" aria-live="polite">{{ state.message }}</p>
-      <p v-else-if="state.message" class="message" role="status" aria-live="polite">{{ state.message }}</p>
-      <p v-if="isSettingsPage" class="hint">如使用 MIUI/HyperOS，请在权限配置中允许通知、自启动、锁屏显示与不限制省电。</p>
-    </main>
-
-    <div v-if="photoPreviewOpen && waterCheckInPhotoPreview" class="photo-preview-overlay" role="dialog" aria-modal="true" aria-label="图片预览" @click.self="photoPreviewOpen = false">
-      <section class="photo-preview-dialog">
-        <button class="photo-preview-close" aria-label="关闭图片预览" @click="photoPreviewOpen = false">×</button>
-        <img :src="waterCheckInPhotoPreview" :alt="waterCheckIn.photoName || '所选图片预览'" />
-        <p>{{ waterCheckIn.photoName || '所选图片' }}</p>
+        <p class="sound-note">应用每 12 小时自动检查一次。若连接测试失败，请切换网络或检查代理后再更新；安装前仍会显示 Android 系统确认页。</p>
       </section>
     </div>
 
