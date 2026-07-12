@@ -137,7 +137,7 @@ class WaterReminderPlugin : Plugin() {
             text = config.waterNotificationText
         } else {
             title = "亮屏时间过长（测试）"
-            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，建议息屏休息一下。"
+            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，请在 ${config.requiredScreenOffMinutes.coerceAtLeast(1) * 2} 分钟内累计息屏 ${config.requiredScreenOffMinutes.coerceAtLeast(1)} 分钟。"
         }
         AlertCoordinator.alertAsync(context, type, title, text, config, isTest = true, sessionId = "test-${System.currentTimeMillis()}") { result ->
             call.resolve(result.toJsObject())
@@ -220,7 +220,11 @@ class WaterReminderPlugin : Plugin() {
 
     @PluginMethod
     fun getWaterCheckInHistory(call: PluginCall) {
-        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context, call.getInt("limit", 20) ?: 20)))
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(
+            context,
+            call.getInt("limit", 20) ?: 20,
+            call.getBoolean("deletedOnly", false) ?: false,
+        )))
     }
 
     @PluginMethod
@@ -277,6 +281,13 @@ class WaterReminderPlugin : Plugin() {
             call.reject("喝水记录保存失败或本次提醒已经处理")
             return
         }
+        if (sessionId.isBlank()) {
+            val config = ReminderPreferences.read(context)
+            if (config.enabled) {
+                val next = WaterReminderScheduler.calculateNextReminderTime(config, System.currentTimeMillis())
+                WaterReminderScheduler.scheduleNextReminder(context, next)
+            }
+        }
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
     }
 
@@ -312,6 +323,36 @@ class WaterReminderPlugin : Plugin() {
             System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
         )
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
+    }
+
+    @PluginMethod
+    fun updateWaterRecordDescription(call: PluginCall) {
+        val id = call.getString("id").orEmpty()
+        val description = call.getString("description").orEmpty()
+        if (description.length > 500) {
+            call.reject("喝水说明不能超过 500 个字符")
+            return
+        }
+        val updated = WaterCheckInStore.updateDescription(context, id, description)
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("updated", updated)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
+    }
+
+    @PluginMethod
+    fun deleteWaterRecord(call: PluginCall) {
+        val deleted = WaterCheckInStore.softDelete(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("deleted", deleted)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
+    }
+
+    @PluginMethod
+    fun restoreWaterRecord(call: PluginCall) {
+        val restored = WaterCheckInStore.restore(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("restored", restored)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
     }
 
     @PluginMethod
@@ -611,7 +652,7 @@ class WaterReminderPlugin : Plugin() {
         config.minIntervalMinutes < 1 -> "最小间隔必须大于 0"
         config.maxIntervalMinutes < config.minIntervalMinutes -> "最大间隔不可小于最小间隔"
         config.screenOnLimitMinutes < 0 -> "亮屏超时提醒分钟数不可小于 0"
-        config.requiredScreenOffMinutes < 1 -> "连续息屏分钟数必须大于 0"
+        config.requiredScreenOffMinutes < 1 -> "累计息屏分钟数必须大于 0"
         config.cancelBeforeLockCount < 1 -> "取消后强制熄屏次数必须大于 0"
         config.waterRetryMinutes !in 1..180 -> "未喝后的再次提醒间隔必须在 1-180 分钟之间"
         config.waterVolumePercent !in 0..100 || config.screenVolumePercent !in 0..100 -> "提醒音量必须在 0-100 之间"

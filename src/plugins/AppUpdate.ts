@@ -44,6 +44,7 @@ export interface AppUpdatePlugin {
   getUpdateState(): Promise<UpdateState>
   setUpdateChannel(options: { channel: UpdateChannel }): Promise<UpdateState>
   checkForUpdate(options?: { channel?: UpdateChannel; manual?: boolean }): Promise<UpdateState>
+  testGithubConnection(): Promise<{ ok: boolean; message: string; latencyMs: number; repository: string }>
   downloadUpdate(): Promise<UpdateState>
   installDownloadedUpdate(): Promise<InstallUpdateResult>
   openUnknownSourceSettings(): Promise<{ opened: boolean }>

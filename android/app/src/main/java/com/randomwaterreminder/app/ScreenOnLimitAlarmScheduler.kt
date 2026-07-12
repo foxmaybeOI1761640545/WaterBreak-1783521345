@@ -36,6 +36,12 @@ object ScreenOnLimitAlarmScheduler {
 
         val state = prefs.getString(ScreenStateTracker.KEY_CURRENT_STATE, "unknown") ?: "unknown"
         val restRequired = prefs.getBoolean(ScreenStateTracker.KEY_REST_REQUIRED, false)
+        val requiredOffMillis = config.requiredScreenOffMinutes.coerceAtLeast(1) * 60_000L
+        val restWindowStartedAt = prefs.getLong(ScreenStateTracker.KEY_REST_WINDOW_STARTED_AT, 0L).takeIf { it > 0L } ?: now
+        val restWindowEndsAt = restWindowStartedAt + requiredOffMillis * 2L
+        val accumulatedOffMillis = if (restRequired) ScreenEventLog.offDurationBetween(appContext, restWindowStartedAt, now) else 0L
+        val restRemainingMillis = (requiredOffMillis - accumulatedOffMillis).coerceAtLeast(0L)
+        val nextRestCheckAt = minOf(restWindowEndsAt, now + if (state == "off") restRemainingMillis.coerceAtLeast(1_000L) else REPEAT_ALERT_INTERVAL_MILLIS)
         val triggerAt = when (state) {
             "on" -> {
                 val lastOn = prefs.getLong(ScreenStateTracker.KEY_LAST_SCREEN_ON, 0L)
@@ -43,17 +49,13 @@ object ScreenOnLimitAlarmScheduler {
                     ?: prefs.getLong(ScreenStateTracker.KEY_STATE_SINCE, 0L)
                 when {
                     lastOn <= 0L -> now + POLL_INTERVAL_MILLIS
-                    restRequired -> now + REPEAT_ALERT_INTERVAL_MILLIS
+                    restRequired -> nextRestCheckAt.coerceAtLeast(now + 1_000L)
                     else -> (lastOn + config.screenOnLimitMinutes * 60_000L).coerceAtLeast(now + 1_000L)
                 }
             }
             "off" -> {
                 if (restRequired) {
-                    val restStarted = prefs.getLong(ScreenStateTracker.KEY_REST_STARTED_AT, 0L)
-                        .takeIf { it > 0L }
-                        ?: prefs.getLong(ScreenStateTracker.KEY_STATE_SINCE, now)
-                    val clearAt = restStarted + config.requiredScreenOffMinutes.coerceAtLeast(1) * 60_000L
-                    minOf(clearAt.coerceAtLeast(now + 1_000L), now + POLL_INTERVAL_MILLIS)
+                    minOf(nextRestCheckAt.coerceAtLeast(now + 1_000L), now + POLL_INTERVAL_MILLIS)
                 } else {
                     // Keep one short-lived alarm queued while the process is absent. When the
                     // device wakes, the receiver queries UsageEvents and discovers the new

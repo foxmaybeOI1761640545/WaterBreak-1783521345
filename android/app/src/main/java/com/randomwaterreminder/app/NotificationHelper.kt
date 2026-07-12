@@ -129,15 +129,25 @@ object NotificationHelper {
         sessionId: String = "",
         isTest: Boolean = false,
     ): Notification {
-        val reminderIntent = if (type == ReminderType.WATER) {
+        val alertIntent = if (type == ReminderType.WATER) {
             AppNavigation.waterCheckInIntent(context, sessionId, isTest)
         } else {
             ReminderAlertActivity.intent(context, type, title, text, sessionId = sessionId)
         }
-        val pendingIntent = PendingIntent.getActivity(
+        val alertPendingIntent = PendingIntent.getActivity(
             context,
             requestCode(type),
-            reminderIntent,
+            alertIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val pageIntent = AppNavigation.pageIntent(
+            context,
+            if (type == ReminderType.WATER) AppNavigation.PAGE_WATER else AppNavigation.PAGE_SCREEN,
+        )
+        val pagePendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode(type) + 100,
+            pageIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(context, channelId(type))
@@ -150,22 +160,20 @@ object NotificationHelper {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(pagePendingIntent)
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             builder.setVibrate(longArrayOf(0))
                 .setSound(null)
         }
-        if (fullScreen) builder.setFullScreenIntent(pendingIntent, true)
+        if (fullScreen) builder.setFullScreenIntent(alertPendingIntent, true)
         return builder.build()
     }
 
     fun buildOverlayRuntimeNotification(context: Context, type: ReminderType, title: String): Notification {
         ensureOverlayRuntimeChannel(context)
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        val pendingIntent = launchIntent?.let {
-            PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        }
+        val launchIntent = AppNavigation.pageIntent(context, if (type == ReminderType.WATER) AppNavigation.PAGE_WATER else AppNavigation.PAGE_SCREEN)
+        val pendingIntent = PendingIntent.getActivity(context, 7101, launchIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(context, OVERLAY_RUNTIME_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)

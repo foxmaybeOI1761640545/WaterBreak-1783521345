@@ -144,7 +144,7 @@ object WaterCheckInStore {
             .commit()
     }
 
-    fun snapshot(context: Context, limit: Int = 20): JSONObject = synchronized(lock) {
+    fun snapshot(context: Context, limit: Int = 20, deletedOnly: Boolean = false): JSONObject = synchronized(lock) {
         val p = prefs(context)
         val stored = records(p)
         val now = System.currentTimeMillis()
@@ -160,6 +160,7 @@ object WaterCheckInStore {
         var lastDrankAt = 0L
         for (index in 0 until stored.length()) {
             val record = stored.optJSONObject(index) ?: continue
+            if (record.optLong("deletedAt", 0L) > 0L) continue
             val timestamp = record.optLong("timestamp", 0L)
             if (record.optString("type") == "drank" && timestamp in todayStart..now) {
                 todayTotalMl += record.optDouble("amountMl", 0.0).coerceAtLeast(0.0)
@@ -168,11 +169,12 @@ object WaterCheckInStore {
             }
         }
         val recent = JSONArray()
-        val start = (stored.length() - limit.coerceIn(1, MAX_RECORDS)).coerceAtLeast(0)
-        for (index in stored.length() - 1 downTo start) {
-            stored.optJSONObject(index)?.let { record ->
-                recent.put(JSONObject(record.toString()).apply { remove("photoPath") })
-            }
+        for (index in stored.length() - 1 downTo 0) {
+            val record = stored.optJSONObject(index) ?: continue
+            val isDeleted = record.optLong("deletedAt", 0L) > 0L
+            if (isDeleted != deletedOnly) continue
+            recent.put(JSONObject(record.toString()).apply { remove("photoPath") })
+            if (recent.length() >= limit.coerceIn(1, MAX_RECORDS)) break
         }
         JSONObject()
             .put("consecutiveNotDrank", p.getInt(KEY_CONSECUTIVE_NOT_DRANK, 0).coerceAtLeast(0))
@@ -181,6 +183,24 @@ object WaterCheckInStore {
             .put("todayRecordCount", todayRecordCount)
             .put("lastDrankAt", lastDrankAt)
             .put("records", recent)
+    }
+
+    fun updateDescription(context: Context, id: String, description: String): Boolean = synchronized(lock) {
+        if (id.isBlank() || description.length > 500) return@synchronized false
+        mutateRecord(context, id) { record ->
+            val normalized = description.trim()
+            if (normalized.isBlank()) record.remove("description") else record.put("description", normalized)
+        }
+    }
+
+    fun softDelete(context: Context, id: String, now: Long = System.currentTimeMillis()): Boolean = synchronized(lock) {
+        mutateRecord(context, id) { record ->
+            if (record.optLong("deletedAt", 0L) <= 0L) record.put("deletedAt", now)
+        }
+    }
+
+    fun restore(context: Context, id: String): Boolean = synchronized(lock) {
+        mutateRecord(context, id) { record -> record.remove("deletedAt") }
     }
 
     fun portableState(context: Context): JSONObject = synchronized(lock) {
@@ -226,6 +246,7 @@ object WaterCheckInStore {
                 }
             }
             if (type == "not_drank") record.put("consecutiveNotDrank", item.optInt("consecutiveNotDrank", 1).coerceIn(1, 3))
+            item.optLong("deletedAt", 0L).takeIf { it > 0L }?.let { record.put("deletedAt", it) }
             item.optString("photoFileName").takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }?.let { record.put("photoFileName", it) }
             validated.put(record)
         }
@@ -266,6 +287,18 @@ object WaterCheckInStore {
     private fun appendRecord(records: JSONArray, record: JSONObject) {
         records.put(record)
         while (records.length() > MAX_RECORDS) records.remove(0)
+    }
+
+    private fun mutateRecord(context: Context, id: String, mutation: (JSONObject) -> Unit): Boolean {
+        val p = prefs(context)
+        val stored = records(p)
+        for (index in 0 until stored.length()) {
+            val record = stored.optJSONObject(index) ?: continue
+            if (record.optString("id") != id) continue
+            mutation(record)
+            return p.edit().putString(KEY_RECORDS, stored.toString()).commit()
+        }
+        return false
     }
 
     private fun roundOneDecimal(value: Double): Double = kotlin.math.round(value * 10.0) / 10.0
