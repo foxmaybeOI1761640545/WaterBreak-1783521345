@@ -23,8 +23,8 @@ android {
         applicationId "com.randomwaterreminder.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 13
-        versionName "1.0.12"
+        versionCode 14
+        versionName "1.0.13"
         buildConfigField "String", "UPDATE_REPOSITORY", "\"${updateRepository}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
