@@ -77,6 +77,10 @@ export interface ScreenStateStatus {
   lastScreenOffTime: number
   restRequired?: boolean
   restStartedAt?: number
+  restWindowStartedAt?: number
+  restWindowEndsAt?: number
+  restAccumulatedOffMs?: number
+  restRemainingOffMs?: number
   nextScreenCheckAt?: number
   trackingReliable?: boolean
   cycleCancelCount?: number

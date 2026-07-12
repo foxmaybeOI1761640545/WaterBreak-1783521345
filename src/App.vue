@@ -87,7 +87,8 @@ const installAfterDownload = ref(false)
 const retryInstallOnResume = ref(false)
 const photoPreviewOpen = ref(false)
 const historyShowingTrash = ref(false)
-const historyHideNotDrank = ref(false)
+const HISTORY_HIDE_NOT_DRANK_KEY = 'water-history-hide-not-drank'
+const historyHideNotDrank = ref(readStoredBoolean(HISTORY_HIDE_NOT_DRANK_KEY))
 const historySelectedDayKey = ref('')
 const expandedHistoryDays = reactive<Record<string, boolean>>({})
 const editingRecordId = ref('')
@@ -152,10 +153,9 @@ const currentScreenDurationText = computed(() => {
   const base = state.screenState.currentScreenState === 'on' && state.screenState.lastScreenOnTime ? state.screenState.lastScreenOnTime : state.screenState.currentScreenStateSince
   return formatDuration(base ? state.now - base : 0)
 })
-const todayScreenOnDurationText = computed(() => {
+const todayScreenOnDurationParts = computed(() => {
   const totalMinutes = Math.max(0, Math.floor((state.screenState?.todayScreenOnDurationMs || 0) / 60_000))
-  if (totalMinutes >= 60) return `${Math.floor(totalMinutes / 60)} 小时 ${totalMinutes % 60} 分`
-  return `${totalMinutes} 分钟`
+  return { hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 }
 })
 const todayScreenAlertCount = computed(() => state.screenState?.todayScreenAlertCount || 0)
 const todayScreenOnCount = computed(() => state.screenState?.todayScreenOnCount || 0)
@@ -165,6 +165,20 @@ const lastScreenOffText = computed(() => formatTimestamp(state.screenState?.last
 const screenCyclePhase = computed(() => state.screenState?.cyclePhase ?? state.status.screenCyclePhase ?? 'idle')
 const screenCycleCount = computed(() => state.screenState?.cycleCancelCount ?? state.status.cancelCycleCount ?? 0)
 const screenCycleLimit = computed(() => state.screenState?.cycleLimit ?? state.status.screenCycleLimit ?? state.status.cancelBeforeLockCount ?? 1)
+const screenRestRemainingMs = computed(() => {
+  const remaining = Math.max(0, state.screenState?.restRemainingOffMs || 0)
+  if (state.screenState?.currentScreenState !== 'off' || !state.screenState.updatedAt) return remaining
+  return Math.max(0, remaining - Math.max(0, state.now - state.screenState.updatedAt))
+})
+const screenRecoveryHint = computed(() => {
+  if (!state.screenState?.restRequired) return ''
+  const remainingMinutes = Math.max(1, Math.ceil(screenRestRemainingMs.value / 60_000))
+  if (state.screenState.currentScreenState === 'off') {
+    return `保持息屏到 ${formatClock(state.now + screenRestRemainingMs.value)}，即可恢复正常使用。`
+  }
+  const windowEndsAt = state.screenState.restWindowEndsAt || state.now
+  return `请在 ${formatClock(windowEndsAt)} 前累计息屏 ${remainingMinutes} 分钟，即可恢复正常使用。`
+})
 const latestWaterRecord = computed(() => state.waterHistory.records[0])
 const historyChartDays = computed(() => {
   const today = new Date(state.now)
@@ -282,7 +296,9 @@ function localDayKey(timestamp: number) { const date = new Date(timestamp); retu
 function historyAmountBarHeight(amountMl: number) { return `${Math.max(amountMl > 0 ? 10 : 3, Math.round(amountMl / historyChartMaxAmount.value * 100))}%` }
 function historyCountBarHeight(count: number) { return `${Math.max(count > 0 ? 10 : 3, Math.round(count / historyChartMaxCount.value * 100))}%` }
 function soundModeText(mode: ReminderSoundMode, name?: string) { return mode === 'custom' ? `自定义：${name || '已导入音频'}` : '应用默认提示音' }
+function readStoredBoolean(key: string) { try { return window.localStorage.getItem(key) === 'true' } catch { return false } }
 function formatTimestamp(timestamp: number) { return timestamp ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '暂无记录' }
+function formatClock(timestamp: number) { return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) }
 function formatDuration(durationMs: number) {
   if (!durationMs) return '暂无记录'
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1000))
@@ -345,7 +361,7 @@ function validateConfig(config: ReminderConfig) {
   if (config.maxIntervalMinutes < config.minIntervalMinutes) throw new Error('最大间隔不可小于最小间隔')
   if (config.waterRetryMinutes < 1 || config.waterRetryMinutes > 180) throw new Error('未喝后的再次提醒间隔必须在 1-180 分钟之间')
   if (config.screenOnLimitMinutes < 0) throw new Error('亮屏超时提醒分钟数不可小于 0')
-  if (config.requiredScreenOffMinutes < 1) throw new Error('连续息屏分钟数必须大于 0')
+  if (config.requiredScreenOffMinutes < 1) throw new Error('累计息屏分钟数必须大于 0')
   if (config.cancelBeforeLockCount < 1) throw new Error('取消后强制熄屏次数必须大于 0')
   if (config.waterVolumePercent < 0 || config.waterVolumePercent > 100 || config.screenVolumePercent < 0 || config.screenVolumePercent > 100) throw new Error('提醒音量必须在 0-100% 之间')
   if (config.waterSoundMode === 'custom' && !config.waterCustomSoundUri) throw new Error('请先导入喝水提醒自定义提示音')
@@ -870,6 +886,10 @@ async function openWaterHistory() {
   switchPage('waterHistory', true)
 }
 function showCurrentWaterHistory() { historyShowingTrash.value = false }
+function toggleHistoryHideNotDrank() {
+  historyHideNotDrank.value = !historyHideNotDrank.value
+  try { window.localStorage.setItem(HISTORY_HIDE_NOT_DRANK_KEY, String(historyHideNotDrank.value)) } catch { /* Keep the in-memory preference when storage is unavailable. */ }
+}
 function showDeletedWaterHistory() { historyShowingTrash.value = true; historySelectedDayKey.value = '' }
 function selectHistoryDay(key: string) { historySelectedDayKey.value = key; expandedHistoryDays[key] = true }
 function clearHistoryDayFilter() { historySelectedDayKey.value = '' }
@@ -1210,7 +1230,7 @@ onUnmounted(() => {
           <div class="screen-card-heading"><div><span>今日屏幕警示</span><small>{{ todayWaterDateText }}</small></div><div class="screen-warning-icon" aria-hidden="true">⏱</div></div>
           <div class="screen-alert-total"><strong>{{ todayScreenAlertCount }}</strong><span>次超时提醒</span></div>
           <div class="screen-today-stats">
-            <div><span>今日亮屏</span><strong>{{ todayScreenOnDurationText }}</strong></div>
+            <div><span>今日亮屏</span><strong class="screen-duration-value"><b>{{ todayScreenOnDurationParts.hours }} 小时</b><small>{{ todayScreenOnDurationParts.minutes }} 分钟</small></strong></div>
             <div><span>亮屏次数</span><strong>{{ todayScreenOnCount }} 次</strong></div>
             <div><span>最近警示</span><strong>{{ lastScreenAlertText }}</strong></div>
           </div>
@@ -1225,6 +1245,7 @@ onUnmounted(() => {
             </div>
           </div>
           <p v-if="state.screenDataStale" class="dashboard-warning">数据刷新失败，以下内容可能不是最新状态。</p>
+          <p v-if="screenRecoveryHint" class="rest-recovery-hint">{{ screenRecoveryHint }}</p>
           <div class="summary-grid compact">
             <div><span>当前屏幕状态</span><strong>{{ currentScreenStateText }}</strong></div>
             <div><span>当前状态持续</span><strong>{{ currentScreenDurationText }}</strong></div>
@@ -1304,7 +1325,7 @@ onUnmounted(() => {
           <div class="history-chart-legend"><span><i class="amount"></i>饮水量</span><span><i class="count"></i>次数</span></div>
           <div class="history-chart" role="list" aria-label="最近七天饮水趋势">
             <button v-for="day in historyChartDays" :key="day.key" class="history-chart-day" :class="{ selected: historySelectedDayKey === day.key }" :aria-label="`${day.label}，饮水 ${day.amountMl} 毫升，${day.count} 次`" :aria-pressed="historySelectedDayKey === day.key" @click="selectHistoryDay(day.key)">
-              <strong>{{ Math.round(day.amountMl) }}</strong>
+              <span class="history-chart-values"><strong>{{ Math.round(day.amountMl) }}ml</strong><small>{{ day.count }}次</small></span>
               <span class="history-bars"><i class="amount" :style="{ height: historyAmountBarHeight(day.amountMl) }"></i><i class="count" :style="{ height: historyCountBarHeight(day.count) }"></i></span>
               <span>{{ day.weekday }}</span><small>{{ day.label }}</small>
             </button>
@@ -1313,7 +1334,7 @@ onUnmounted(() => {
         <div class="history-view-switch" role="tablist" aria-label="喝水记录分类">
           <button class="ghost" :class="{ selected: !historyShowingTrash }" @click="showCurrentWaterHistory">当前记录（{{ state.waterHistory.records.length }}）</button>
           <button class="ghost" :class="{ selected: historyShowingTrash }" @click="showDeletedWaterHistory">本地回收站（{{ state.waterDeletedRecords.length }}）</button>
-          <button v-if="!historyShowingTrash" class="ghost history-filter-button" :class="{ selected: historyHideNotDrank }" :aria-pressed="historyHideNotDrank" @click="historyHideNotDrank = !historyHideNotDrank">{{ historyHideNotDrank ? '显示未喝记录' : '隐藏未喝记录' }}</button>
+          <button v-if="!historyShowingTrash" class="ghost history-filter-button" :class="{ selected: historyHideNotDrank }" :aria-pressed="historyHideNotDrank" @click="toggleHistoryHideNotDrank">{{ historyHideNotDrank ? '显示未喝记录' : '隐藏未喝记录' }}</button>
         </div>
         <section v-if="!historyGroups.length" class="card empty-history"><span>{{ historyShowingTrash ? '♻️' : '💧' }}</span><h2>{{ historyShowingTrash ? '回收站为空' : historySelectedDayKey ? '当天没有记录' : '还没有喝水记录' }}</h2><p>{{ historyShowingTrash ? '软删除的记录会保留在本机，并可在这里恢复。' : historyHideNotDrank ? '当前筛选条件下没有可显示的记录。' : '完成一次饮水记录后，类型、说明和凭证照片会显示在这里。' }}</p></section>
         <section v-else class="history-groups">
@@ -1413,10 +1434,10 @@ onUnmounted(() => {
           <div class="form-grid">
             <label>屏幕超时提醒启用<select v-model="state.status.screenLimitEnabled"><option :value="true">开启</option><option :value="false">关闭</option></select></label>
             <label>亮屏时长阈值（分钟）<input v-model.number="state.status.screenOnLimitMinutes" type="number" min="0" max="1440" /></label>
-            <label>连续息屏恢复（分钟）<input v-model.number="state.status.requiredScreenOffMinutes" type="number" min="1" max="1440" /></label>
+            <label>累计息屏恢复（分钟）<input v-model.number="state.status.requiredScreenOffMinutes" type="number" min="1" max="1440" /></label>
             <label>取消几次后强制熄屏<input v-model.number="state.status.cancelBeforeLockCount" type="number" min="1" max="99" /></label>
           </div>
-          <p class="sound-note">屏幕提醒会显示“熄屏”和“取消”按钮；连续取消达到设置次数后会尝试执行设备管理锁屏。</p>
+          <p class="sound-note">触发后须在设置时长的 2 倍时间内累计完成息屏；连续取消达到设置次数后会尝试执行设备管理锁屏。</p>
         </section>
         <section class="card form-card" @change="autoSaveSettings('screen')">
           <h2>屏幕提醒铃声</h2>

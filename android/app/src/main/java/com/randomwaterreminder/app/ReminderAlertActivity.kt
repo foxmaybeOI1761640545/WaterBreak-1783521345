@@ -161,7 +161,7 @@ class ReminderAlertActivity : Activity() {
             reminderType == ReminderType.WATER && waterMode == WATER_MODE_FORCED_STATE -> "已经连续三次选择未喝，请拍摄自拍验证当前状态。照片仅保存在本机。"
             else -> source.getStringExtra(EXTRA_TEXT)
         }
-            ?: if (reminderType == ReminderType.WATER) config.waterNotificationText else "已经连续亮屏 ${config.screenOnLimitMinutes} 分钟以上，建议息屏休息一下。"
+            ?: if (reminderType == ReminderType.WATER) config.waterNotificationText else "已经连续亮屏 ${config.screenOnLimitMinutes} 分钟以上，请在 ${config.requiredScreenOffMinutes * 2} 分钟内累计息屏 ${config.requiredScreenOffMinutes} 分钟。"
         setFinishOnTouchOutside(false)
         setContentView(buildContent(title, text, reminderType))
     }

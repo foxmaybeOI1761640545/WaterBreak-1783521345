@@ -137,7 +137,7 @@ class WaterReminderPlugin : Plugin() {
             text = config.waterNotificationText
         } else {
             title = "亮屏时间过长（测试）"
-            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，建议息屏休息一下。"
+            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，请在 ${config.requiredScreenOffMinutes.coerceAtLeast(1) * 2} 分钟内累计息屏 ${config.requiredScreenOffMinutes.coerceAtLeast(1)} 分钟。"
         }
         AlertCoordinator.alertAsync(context, type, title, text, config, isTest = true, sessionId = "test-${System.currentTimeMillis()}") { result ->
             call.resolve(result.toJsObject())
@@ -652,7 +652,7 @@ class WaterReminderPlugin : Plugin() {
         config.minIntervalMinutes < 1 -> "最小间隔必须大于 0"
         config.maxIntervalMinutes < config.minIntervalMinutes -> "最大间隔不可小于最小间隔"
         config.screenOnLimitMinutes < 0 -> "亮屏超时提醒分钟数不可小于 0"
-        config.requiredScreenOffMinutes < 1 -> "连续息屏分钟数必须大于 0"
+        config.requiredScreenOffMinutes < 1 -> "累计息屏分钟数必须大于 0"
         config.cancelBeforeLockCount < 1 -> "取消后强制熄屏次数必须大于 0"
         config.waterRetryMinutes !in 1..180 -> "未喝后的再次提醒间隔必须在 1-180 分钟之间"
         config.waterVolumePercent !in 0..100 || config.screenVolumePercent !in 0..100 -> "提醒音量必须在 0-100 之间"
