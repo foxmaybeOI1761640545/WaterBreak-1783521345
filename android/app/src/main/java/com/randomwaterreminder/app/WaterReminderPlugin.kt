@@ -21,6 +21,7 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -266,7 +267,7 @@ class WaterReminderPlugin : Plugin() {
             return
         }
         val sessionId = call.getString("sessionId").orEmpty()
-        val photo = saveWaterPhoto(call, "drank") ?: return
+        val photos = saveWaterPhotos(call, "drank") ?: return
         val measurement = WaterMeasurement(
             entryMode = call.getString("entryMode", "volume") ?: "volume",
             drinkType = call.getString("drinkType", "白水") ?: "白水",
@@ -276,8 +277,8 @@ class WaterReminderPlugin : Plugin() {
             emptyWeightGrams = call.getDouble("emptyWeightGrams"),
             totalWeightGrams = call.getDouble("totalWeightGrams"),
         )
-        if (!WaterCheckInStore.recordDrank(context, sessionId, amountMl, photo, measurement)) {
-            photo.delete()
+        if (!WaterCheckInStore.recordDrank(context, sessionId, amountMl, photos, measurement)) {
+            photos.forEach { it.delete() }
             call.reject("喝水记录保存失败或本次提醒已经处理")
             return
         }
@@ -591,6 +592,53 @@ class WaterReminderPlugin : Plugin() {
             call.reject(it.message ?: "保存自拍失败")
             null
         }
+    }
+
+    private fun saveWaterPhotos(call: PluginCall, prefix: String): List<File>? {
+        val encodedPhotos = call.getArray("photos")?.let { JSONArray(it.toString()) } ?: JSONArray()
+        if (encodedPhotos.length() > 6) {
+            call.reject("每条记录最多保存 6 张凭证照片")
+            return null
+        }
+        // Accept the pre-v1.0.14 single-photo shape so older web bundles remain usable.
+        if (encodedPhotos.length() == 0 && !call.getString("dataBase64").isNullOrBlank()) {
+            return saveWaterPhoto(call, prefix)?.let(::listOf)
+        }
+        val saved = mutableListOf<File>()
+        var encodedSize = 0L
+        for (index in 0 until encodedPhotos.length()) {
+            val item = encodedPhotos.optJSONObject(index)
+            val mimeType = item?.optString("mimeType", "image/jpeg").orEmpty()
+            val dataBase64 = item?.optString("dataBase64").orEmpty()
+            encodedSize += dataBase64.length
+            if (!mimeType.startsWith("image/") || dataBase64.isBlank()) {
+                saved.forEach { it.delete() }
+                call.reject("第 ${index + 1} 张凭证不是有效图片")
+                return null
+            }
+            if (dataBase64.length > 30_000_000 || encodedSize > 60_000_000L) {
+                saved.forEach { it.delete() }
+                call.reject("凭证照片过大，请减少数量或选择更小的图片")
+                return null
+            }
+            val extension = when (mimeType.lowercase()) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            val file = runCatching {
+                WaterCheckInStore.createPhotoFile(context, prefix, extension).apply {
+                    writeBytes(Base64.decode(dataBase64, Base64.DEFAULT))
+                    require(length() > 0L) { "凭证照片为空" }
+                }
+            }.getOrElse {
+                saved.forEach { photo -> photo.delete() }
+                call.reject(it.message ?: "保存凭证照片失败")
+                return null
+            }
+            saved += file
+        }
+        return saved
     }
 
     @PluginMethod

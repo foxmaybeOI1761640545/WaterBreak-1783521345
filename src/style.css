@@ -336,8 +336,12 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .photo-picker { overflow:hidden; }
 .photo-picker input { position:absolute; inset:0; inline-size:100%; block-size:100%; margin:0; opacity:0; cursor:pointer; }
 .photo-picker span { color:#0284c7; font-weight:900; text-align:right; overflow-wrap:anywhere; }
+.hidden-file-input { position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; }
+.photo-picker-button { display:grid; grid-template-columns:minmax(0,1fr) auto; width:100%; color:#355468; border:1px dashed #38bdf8; background:#f0f9ff; box-shadow:none; text-align:left; }
+.photo-picker-button > span { color:#355468; font-weight:700; text-align:left; }
+.photo-picker-button > strong { color:#0284c7; font-size:.78rem; text-align:right; }
 .urgent-picker { border-color:#fb923c; background:#fff7ed; }
-.urgent-picker span { color:#c2410c; }
+.urgent-picker > strong { color:#c2410c; }
 .inline-message { margin:8px 0; padding:10px 12px; border-radius:13px; color:#166985; background:#f0f9ff; }
 .inline-message.warning { color:#b45309; background:#fff7ed; }
 .full-button { width:100%; }
@@ -359,12 +363,16 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .compact-check-in-form .calculation-card { margin:0 0 7px; padding:8px 10px; border-radius:12px; }
 .compact-check-in-form .calculation-card strong { font-size:1.05rem; }
 .compact-check-in-form .calculation-card small { font-size:.7rem; line-height:1.25; }
-.check-in-photo-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; min-height:0; }
+.check-in-photo-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); gap:8px; min-height:0; }
 .check-in-photo-row .photo-picker { min-height:52px; margin:0; padding:8px 11px; font-size:.8rem; }
 .check-in-photo-row .photo-picker span { min-width:0; font-size:.78rem; line-height:1.2; overflow-wrap:anywhere; }
+.selected-photo-strip { display:flex; min-width:0; max-width:190px; gap:7px; overflow-x:auto; overscroll-behavior-x:contain; padding:0 2px 3px; scrollbar-width:thin; }
+.selected-photo-strip.single-photo { overflow:visible; }
+.selected-photo-item { position:relative; flex:0 0 auto; }
 .photo-preview-thumb { display:grid; place-items:center; width:52px; height:52px; padding:0; overflow:hidden; border:2px solid #38bdf8; border-radius:13px; background:#e0f2fe; box-shadow:none; }
 .photo-preview-thumb.urgent { border-color:#fb923c; background:#fff7ed; }
 .photo-preview-thumb img { width:100%; height:100%; object-fit:cover; }
+.selected-photo-remove { position:absolute; z-index:2; top:-5px; right:-5px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:2px solid white; border-radius:50%; color:white; background:#dc2626; box-shadow:0 2px 6px rgba(127,29,29,.35); font-size:.8rem; line-height:1; }
 .check-in-actions { margin:7px 0 0; }
 .check-in-actions button { min-height:40px; padding:8px; }
 .compact-inline-message { position:absolute; z-index:3; right:15px; bottom:58px; left:15px; margin:0; box-shadow:0 10px 24px rgba(23,50,77,.16); }
@@ -373,6 +381,13 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .photo-preview-dialog img { display:block; max-width:100%; max-height:calc(90dvh - 88px); border-radius:14px; object-fit:contain; background:#eaf7fb; }
 .photo-preview-dialog p { max-width:100%; margin:0; color:#557083; overflow-wrap:anywhere; text-align:center; }
 .photo-preview-close { position:absolute; z-index:2; top:8px; right:8px; display:grid; width:38px; height:38px; place-items:center; padding:0; border-radius:50%; color:white; background:rgba(23,50,77,.82); box-shadow:none; font-size:1.45rem; }
+.photo-preview-delete { min-width:180px; }
+.photo-source-dialog { display:grid; width:min(100%,410px); gap:11px; padding:24px; border-radius:24px; background:white; box-shadow:0 28px 80px rgba(1,44,70,.42); }
+.photo-source-dialog h2,.photo-source-dialog p { margin:0; }
+.photo-source-dialog p { color:#557083; line-height:1.5; }
+.photo-source-dialog > button { display:flex; align-items:center; justify-content:center; gap:9px; min-height:50px; }
+.photo-source-dialog > button span { font-size:1.25rem; }
+.photo-source-dialog .photo-source-cancel { min-height:40px; margin-top:2px; }
 
 @media (max-height:780px) {
   .app-content.water-check-in-page { padding-top:5px; padding-bottom:5px; }
@@ -407,6 +422,8 @@ button:disabled, .file-picker:has(input:disabled) { opacity:.55; cursor:not-allo
 .history-meta small { padding:3px 7px; border-radius:999px; color:#0f766e; background:#ccfbf1; font-size:.7rem; white-space:nowrap; }
 .history-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:10px; }
 .history-actions button { min-width:0; min-height:36px; margin-top:0; padding:7px 5px; font-size:.74rem; }
+.history-photo-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:8px; margin-top:10px; }
+.history-photo-grid img { width:100%; height:112px; margin:0; border-radius:12px; object-fit:cover; }
 .history-editor { margin-top:10px; padding:10px; border-radius:14px; background:#f4fbfe; }
 .history-editor label { margin:0; }
 .history-editor > div { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }

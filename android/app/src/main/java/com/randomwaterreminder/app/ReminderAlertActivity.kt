@@ -73,8 +73,8 @@ class ReminderAlertActivity : Activity() {
         when {
             result.succeeded -> {
                 pendingLockMode = PENDING_NONE
-                AlertCoordinator.dismissScreenAlert(this, sessionId)
-                finish()
+                AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
+                finishAfterScreenAction()
             }
             result.needsAdmin -> interactionHandled = false
             result.error.isNotBlank() -> {
@@ -98,7 +98,7 @@ class ReminderAlertActivity : Activity() {
         if (reminderType == ReminderType.WATER && !isTest) {
             val message = when (waterMode) {
                 WATER_MODE_FORCED_STATE -> "请先完成状态自拍验证。"
-                WATER_MODE_DRANK -> "请完成喝水自拍和毫升数记录。"
+                WATER_MODE_DRANK -> "请完成喝水量记录；凭证照片可选。"
                 else -> "请选择“已喝”或“未喝”完成本次提醒。"
             }
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -157,7 +157,7 @@ class ReminderAlertActivity : Activity() {
         }
             ?: if (reminderType == ReminderType.WATER) config.waterNotificationTitle else "亮屏时间过长"
         val text = when {
-            reminderType == ReminderType.WATER && waterMode == WATER_MODE_DRANK -> "请拍摄喝水自拍并填写本次喝水量，记录仅保存在本机。"
+            reminderType == ReminderType.WATER && waterMode == WATER_MODE_DRANK -> "请填写本次喝水量；凭证照片可选，且仅保存在本机。"
             reminderType == ReminderType.WATER && waterMode == WATER_MODE_FORCED_STATE -> "已经连续三次选择未喝，请拍摄自拍验证当前状态。照片仅保存在本机。"
             else -> source.getStringExtra(EXTRA_TEXT)
         }
@@ -292,7 +292,7 @@ class ReminderAlertActivity : Activity() {
         }
         card.addView(photoStatusView)
         card.addView(Button(this).apply {
-            text = if (forced) "拍摄状态自拍" else "拍摄喝水自拍"
+            text = if (forced) "拍摄状态自拍" else "拍摄凭证照片（选填）"
             textSize = 17f
             setOnClickListener { captureWaterPhoto(if (forced) "state" else "drank") }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
@@ -402,17 +402,17 @@ class ReminderAlertActivity : Activity() {
         val photo = pendingPhotoFile
         when {
             amount == null || amount !in 1..5_000 -> Toast.makeText(this, "请输入 1-5000 毫升的喝水量。", Toast.LENGTH_SHORT).show()
-            photo == null || !photo.isFile || photo.length() <= 0L -> Toast.makeText(this, "请先拍摄喝水自拍。", Toast.LENGTH_SHORT).show()
             else -> {
                 interactionHandled = true
-                if (!WaterCheckInStore.recordDrank(this, sessionId, amount.toDouble(), photo)) {
+                val photos = photo?.takeIf { it.isFile && it.length() > 0L }?.let(::listOf).orEmpty()
+                if (!WaterCheckInStore.recordDrank(this, sessionId, amount.toDouble(), photos)) {
                     interactionHandled = false
                     Toast.makeText(this, "本次记录未保存，可能已经处理过。", Toast.LENGTH_SHORT).show()
                     return
                 }
-                photoCommitted = true
+                photoCommitted = photos.isNotEmpty()
                 AlertCoordinator.dismissAlert(this, ReminderType.WATER)
-                Toast.makeText(this, "已在本机保存：${amount} 毫升。", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已在本机保存：${amount} 毫升${if (photos.isNotEmpty()) "及凭证照片" else ""}。", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -446,8 +446,8 @@ class ReminderAlertActivity : Activity() {
         val result = ReminderLockHelper.tryLockNow(this, force = true)
         when {
             result.succeeded -> {
-                AlertCoordinator.dismissScreenAlert(this, sessionId)
-                finish()
+                AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
+                finishAfterScreenAction()
             }
             result.needsAdmin -> {
                 pendingLockMode = PENDING_MANUAL
@@ -468,17 +468,17 @@ class ReminderAlertActivity : Activity() {
         if (interactionHandled) return
         interactionHandled = true
         if (isTest) {
-            AlertCoordinator.dismissScreenAlert(this, sessionId)
+            AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
             Toast.makeText(this, "测试提醒已关闭，不计入取消次数。", Toast.LENGTH_SHORT).show()
-            finish()
+            finishAfterScreenAction()
             return
         }
 
         val result = ScreenStateTracker.recordScreenAlertCancel(this, sessionId)
         if (!result.accepted) {
-            AlertCoordinator.dismissScreenAlert(this, sessionId)
+            AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
             Toast.makeText(this, "本次提醒已经处理，不会重复计数。", Toast.LENGTH_SHORT).show()
-            finish()
+            finishAfterScreenAction()
             return
         }
 
@@ -487,20 +487,25 @@ class ReminderAlertActivity : Activity() {
             AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
             if (!ReminderLockHelper.requestDeviceAdmin(this)) {
                 pendingLockMode = PENDING_NONE
-                AlertCoordinator.dismissScreenAlert(this, sessionId)
+                AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
                 Toast.makeText(this, "已达取消阈值，但无法打开设备管理器授权页。", Toast.LENGTH_LONG).show()
-                finish()
+                finishAfterScreenAction()
             }
             return
         }
 
-        AlertCoordinator.dismissScreenAlert(this, sessionId)
+        AlertCoordinator.dismissScreenAlert(this, sessionId, closeActivity = false)
         val message = when {
             result.lockSucceeded -> "已达到取消阈值并执行熄屏。"
             result.shouldForceLock -> "已达到取消阈值，系统将继续执行熄屏。"
             else -> "已取消本次提醒，未完成息屏休息前仍会再次提醒。"
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        finishAfterScreenAction()
+    }
+
+    private fun finishAfterScreenAction() {
+        if (!isTest) moveTaskToBack(true)
         finish()
     }
 

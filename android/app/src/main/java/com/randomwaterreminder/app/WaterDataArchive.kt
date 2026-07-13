@@ -13,7 +13,7 @@ import java.util.zip.ZipOutputStream
 object WaterDataArchive {
     private const val SCHEMA_ID = "water-reminder.portable-data"
     private const val SCHEMA_VERSION = 1
-    private const val MAX_ENTRIES = 260
+    private const val MAX_ENTRIES = 1_220
     private const val MAX_UNCOMPRESSED_BYTES = 180L * 1024L * 1024L
 
     fun create(context: Context): File {
@@ -32,8 +32,15 @@ object WaterDataArchive {
             val names = linkedSetOf<String>()
             val records = checkIn.optJSONArray("records")
             for (index in 0 until (records?.length() ?: 0)) {
-                records?.optJSONObject(index)?.optString("photoFileName")
-                    ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }
+                val record = records?.optJSONObject(index) ?: continue
+                val photoNames = record.optJSONArray("photoFileNames")
+                for (photoIndex in 0 until (photoNames?.length() ?: 0)) {
+                    photoNames?.optString(photoIndex)
+                        ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }
+                        ?.let { names += it }
+                }
+                record.optString("photoFileName")
+                    .takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }
                     ?.let { names += it }
             }
             names.forEach { name ->

@@ -12,6 +12,7 @@ type WaterDrinkType = '白水' | '冲剂' | '药物' | '饮料' | '茶水' | '�
 type PermissionGuideKey = 'notifications' | 'exact' | 'overlay' | 'usage' | 'fullScreen' | 'waterNotification' | 'screenNotification' | 'deviceAdmin' | 'battery' | 'miuiPermissions' | 'miuiAutostart'
 type PermissionGuidePhase = 'idle' | 'refreshing' | 'ready' | 'launching' | 'waitingReturn' | 'reviewing' | 'complete'
 interface PermissionGuideItem { key: PermissionGuideKey; title: string; purpose: string; status: PermissionValue; applicable: boolean; required: boolean; actionLabel?: string; details?: string }
+interface SelectedWaterPhoto { id: string; name: string; mimeType: string; dataBase64: string }
 
 interface State {
   loading: boolean
@@ -24,7 +25,7 @@ interface State {
   waterHistory: WaterCheckInHistory
   waterDeletedRecords: WaterCheckInRecord[]
   waterContainers: WaterContainer[]
-  waterHistoryImages: Record<string, string>
+  waterHistoryImages: Record<string, string[]>
   now: number
   nextReminderInput: string
   activePage: AppPage
@@ -86,6 +87,10 @@ const githubConnectionToast = ref('')
 const installAfterDownload = ref(false)
 const retryInstallOnResume = ref(false)
 const photoPreviewOpen = ref(false)
+const photoPreviewIndex = ref(0)
+const photoSourceDialogOpen = ref(false)
+const waterGalleryInput = ref<HTMLInputElement | null>(null)
+const waterCameraInput = ref<HTMLInputElement | null>(null)
 const historyShowingTrash = ref(false)
 const HISTORY_HIDE_NOT_DRANK_KEY = 'water-history-hide-not-drank'
 const historyHideNotDrank = ref(readStoredBoolean(HISTORY_HIDE_NOT_DRANK_KEY))
@@ -130,9 +135,7 @@ const waterCheckIn = reactive({
   containerId: '',
   drinkType: '白水' as WaterDrinkType,
   description: '',
-  photoName: '',
-  photoMimeType: '',
-  photoBase64: '',
+  photos: [] as SelectedWaterPhoto[],
   submitting: false,
   message: '',
 })
@@ -236,9 +239,13 @@ const calculatedWaterMl = computed(() => {
   if (!Number.isFinite(total) || !Number.isFinite(empty)) return 0
   return Math.max(0, Math.round((total - empty) * 10) / 10)
 })
-const waterCheckInPhotoPreview = computed(() => waterCheckIn.photoBase64
-  ? `data:${waterCheckIn.photoMimeType || 'image/jpeg'};base64,${waterCheckIn.photoBase64}`
-  : '')
+const waterCheckInPhotoPreview = computed(() => {
+  const photo = waterCheckIn.photos[photoPreviewIndex.value]
+  return photo ? `data:${photo.mimeType || 'image/jpeg'};base64,${photo.dataBase64}` : ''
+})
+const waterPhotoPickerText = computed(() => waterCheckIn.photos.length
+  ? `已选 ${waterCheckIn.photos.length} 张，可继续添加`
+  : waterCheckIn.action === 'forced_state' ? '拍照或从相册选择' : '添加凭证照片')
 const waterDrinkTypes: WaterDrinkType[] = ['白水', '冲剂', '药物', '饮料', '茶水', '果茶', '奶茶', '其他']
 const isManualWaterCheckIn = computed(() => state.activePage === 'waterCheckIn' && !waterCheckIn.sessionId && !waterCheckIn.isTest)
 const cancelCycleText = computed(() => {
@@ -277,6 +284,7 @@ let messageTimer: number | undefined
 let autoSaveTimer: number | undefined
 let resumeTimer: number | undefined
 let filePickerRecoveryTimer: number | undefined
+let waterPhotoMessageTimer: number | undefined
 let lastSavedConfigSignature = ''
 let screenDashboardRefresh: Promise<void> | null = null
 let statusRefresh: Promise<void> | null = null
@@ -388,6 +396,7 @@ function openSettings() {
 }
 function navigateBack() {
   if (photoPreviewOpen.value) { photoPreviewOpen.value = false; return }
+  if (photoSourceDialogOpen.value) { photoSourceDialogOpen.value = false; return }
   if (updatePanelOpen.value) { updatePanelOpen.value = false; return }
   if (isWaterFlowPage.value) {
     if (state.activePage === 'waterCheckIn' && waterCheckIn.action === 'forced_state' && !waterCheckIn.isTest) {
@@ -768,6 +777,16 @@ async function importCustomSound(type: ReminderType, event: Event) {
 function isSupportedAudioFile(file: File) { return file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name) }
 function inferAudioMimeType(fileName: string) { return ({ mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[fileName.split('.').pop()?.toLowerCase() || ''] || 'audio/mpeg' }
 function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '').split(',').pop() || ''); reader.onerror = () => reject(new Error('读取文件失败')); reader.readAsDataURL(file) }) }
+function setWaterCheckInMessage(message: string, clearAfterMs = 0) {
+  if (waterPhotoMessageTimer) window.clearTimeout(waterPhotoMessageTimer)
+  waterCheckIn.message = message
+  if (clearAfterMs > 0) {
+    waterPhotoMessageTimer = window.setTimeout(() => {
+      if (waterCheckIn.message === message) waterCheckIn.message = ''
+      waterPhotoMessageTimer = undefined
+    }, clearAfterMs)
+  }
+}
 function resetWaterCheckIn(sessionId = '', isTest = false, action: 'prompt' | 'drank' | 'forced_state' = 'prompt') {
   waterCheckIn.sessionId = sessionId
   waterCheckIn.isTest = isTest
@@ -777,12 +796,13 @@ function resetWaterCheckIn(sessionId = '', isTest = false, action: 'prompt' | 'd
   waterCheckIn.totalWeightGrams = null
   waterCheckIn.drinkType = '白水'
   waterCheckIn.description = ''
-  waterCheckIn.photoName = ''
-  waterCheckIn.photoMimeType = ''
-  waterCheckIn.photoBase64 = ''
+  waterCheckIn.photos.splice(0)
   waterCheckIn.message = ''
   waterCheckIn.submitting = false
   photoPreviewOpen.value = false
+  photoSourceDialogOpen.value = false
+  photoPreviewIndex.value = 0
+  if (waterPhotoMessageTimer) window.clearTimeout(waterPhotoMessageTimer)
   if (!waterCheckIn.containerId && state.waterContainers.length) waterCheckIn.containerId = state.waterContainers[0].id
 }
 async function openWaterCheckInPage(sessionId: string, isTest: boolean, action: 'prompt' | 'drank' | 'forced_state') {
@@ -799,29 +819,66 @@ async function openWaterCheckInPage(sessionId: string, isTest: boolean, action: 
   await WaterReminder.dismissWaterAlertUi().catch(() => undefined)
   scrollContentToTop()
 }
+function openWaterPhotoSourceDialog() {
+  photoSourceDialogOpen.value = true
+}
+function chooseWaterPhotoSource(source: 'camera' | 'gallery') {
+  photoSourceDialogOpen.value = false
+  nextTick(() => {
+    const input = source === 'camera' ? waterCameraInput.value : waterGalleryInput.value
+    if (!input) return
+    beginFilePicker()
+    input.click()
+  })
+}
+function showWaterPhoto(index: number) {
+  photoPreviewIndex.value = index
+  photoPreviewOpen.value = true
+}
+function removeWaterPhoto(index: number) {
+  if (index < 0 || index >= waterCheckIn.photos.length) return
+  waterCheckIn.photos.splice(index, 1)
+  if (!waterCheckIn.photos.length) photoPreviewOpen.value = false
+  photoPreviewIndex.value = Math.max(0, Math.min(photoPreviewIndex.value, waterCheckIn.photos.length - 1))
+  setWaterCheckInMessage(waterCheckIn.photos.length ? `已删除，当前保留 ${waterCheckIn.photos.length} 张凭证照片。` : '已删除所选凭证照片。', 3000)
+}
 async function handleWaterPhoto(event: Event) {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) { await finishFilePicker(); return }
-  if (!file.type.startsWith('image/')) { waterCheckIn.message = '请选择图片文件'; input.value = ''; await finishFilePicker(); return }
-  if (file.size > 20 * 1024 * 1024) { waterCheckIn.message = '图片不能超过 20MB'; input.value = ''; await finishFilePicker(); return }
+  const pickedFiles = Array.from(input.files || [])
+  if (!pickedFiles.length) { await finishFilePicker(); return }
+  const files = waterCheckIn.action === 'forced_state' ? pickedFiles.slice(0, 1) : pickedFiles
+  const available = waterCheckIn.action === 'forced_state' ? 1 : Math.max(0, 6 - waterCheckIn.photos.length)
+  if (!available) { setWaterCheckInMessage('每条记录最多添加 6 张凭证照片'); input.value = ''; await finishFilePicker(); return }
+  const accepted = files.slice(0, available)
+  if (accepted.some(file => !file.type.startsWith('image/'))) { setWaterCheckInMessage('请选择图片文件'); input.value = ''; await finishFilePicker(); return }
+  if (accepted.some(file => file.size > 20 * 1024 * 1024)) { setWaterCheckInMessage('单张图片不能超过 20MB'); input.value = ''; await finishFilePicker(); return }
   filePickerProcessing = true
   try {
-    waterCheckIn.photoName = file.name
-    waterCheckIn.photoMimeType = file.type || 'image/jpeg'
-    waterCheckIn.photoBase64 = await fileToBase64(file)
+    const photos = await Promise.all(accepted.map(async (file, index) => ({
+      id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+      name: file.name || `照片-${index + 1}.jpg`,
+      mimeType: file.type || 'image/jpeg',
+      dataBase64: await fileToBase64(file),
+    })))
+    if (waterCheckIn.action === 'forced_state') waterCheckIn.photos.splice(0, waterCheckIn.photos.length, ...photos)
+    else waterCheckIn.photos.push(...photos)
     photoPreviewOpen.value = false
-    waterCheckIn.message = '凭证照片已选择，将在提交后保存到本机。'
-  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '读取图片失败' }
+    const omitted = files.length - accepted.length
+    setWaterCheckInMessage(
+      waterCheckIn.action === 'forced_state'
+        ? '状态照片已就绪，仅会保存在本机。'
+        : `已添加 ${photos.length} 张凭证照片${omitted > 0 ? '，其余照片因最多 6 张未添加' : '，可继续添加、预览或删除'}。`,
+      3000,
+    )
+  } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '读取图片失败') }
   finally { filePickerProcessing = false; input.value = ''; await finishFilePicker() }
 }
 async function submitWaterDrank() {
   if (waterCheckIn.submitting) return
   const amount = waterCheckIn.amountMode === 'container' ? calculatedWaterMl.value : Number(waterCheckIn.directMl)
-  if (!Number.isFinite(amount) || amount < 1 || amount > 5000) { waterCheckIn.message = '饮水量必须在 1-5000 毫升之间'; return }
-  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择饮水凭证照片'; return }
-  if (waterCheckIn.description.length > 500) { waterCheckIn.message = '喝水说明不能超过 500 个字符'; return }
-  if (waterCheckIn.isTest) { waterCheckIn.message = `测试完成：${amount} 毫升，不保存记录`; window.setTimeout(() => switchPage('water'), 900); return }
+  if (!Number.isFinite(amount) || amount < 1 || amount > 5000) { setWaterCheckInMessage('饮水量必须在 1-5000 毫升之间'); return }
+  if (waterCheckIn.description.length > 500) { setWaterCheckInMessage('喝水说明不能超过 500 个字符'); return }
+  if (waterCheckIn.isTest) { setWaterCheckInMessage(`测试完成：${amount} 毫升，不保存记录`); window.setTimeout(() => switchPage('water'), 900); return }
   waterCheckIn.submitting = true
   try {
     state.waterHistory = await WaterReminder.saveWaterDrankRecord({
@@ -834,13 +891,12 @@ async function submitWaterDrank() {
       containerName: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.name : undefined,
       emptyWeightGrams: waterCheckIn.amountMode === 'container' ? selectedWaterContainer.value?.emptyWeightGrams : undefined,
       totalWeightGrams: waterCheckIn.amountMode === 'container' ? Number(waterCheckIn.totalWeightGrams) : undefined,
-      mimeType: waterCheckIn.photoMimeType,
-      dataBase64: waterCheckIn.photoBase64,
+      photos: waterCheckIn.photos.map(photo => ({ fileName: photo.name, mimeType: photo.mimeType, dataBase64: photo.dataBase64 })),
     })
     await refreshStatus()
-    setUserMessage(`已保存本次${waterCheckIn.drinkType} ${amount} 毫升及凭证照片`)
+    setUserMessage(`已保存本次${waterCheckIn.drinkType} ${amount} 毫升${waterCheckIn.photos.length ? `及 ${waterCheckIn.photos.length} 张本地凭证照片` : ''}`)
     switchPage('water')
-  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存喝水记录失败' }
+  } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '保存喝水记录失败') }
   finally { waterCheckIn.submitting = false }
 }
 async function submitWaterNotDrank() {
@@ -851,26 +907,26 @@ async function submitWaterNotDrank() {
     const result = await WaterReminder.recordWaterNotDrank({ sessionId: waterCheckIn.sessionId })
     if (result.requiresStatePhoto) {
       waterCheckIn.action = 'forced_state'
-      waterCheckIn.photoBase64 = ''
-      waterCheckIn.photoName = ''
-      waterCheckIn.message = '已连续三次未喝，请完成状态自拍验证。'
+      waterCheckIn.photos.splice(0)
+      setWaterCheckInMessage('已连续三次未喝，请完成状态自拍验证。')
     } else {
       setUserMessage(`将在 ${result.retryMinutes} 分钟后再次提醒`)
       await refreshStatus()
       switchPage('water')
     }
-  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '处理未喝失败' }
+  } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '处理未喝失败') }
   finally { waterCheckIn.submitting = false }
 }
 async function submitWaterStateCheck() {
   if (waterCheckIn.submitting) return
-  if (!waterCheckIn.photoBase64) { waterCheckIn.message = '请先拍摄或选择状态自拍'; return }
+  const photo = waterCheckIn.photos[0]
+  if (!photo) { setWaterCheckInMessage('请先拍摄或选择状态自拍'); return }
   waterCheckIn.submitting = true
   try {
-    state.waterHistory = await WaterReminder.saveWaterStateCheck({ sessionId: waterCheckIn.sessionId, mimeType: waterCheckIn.photoMimeType, dataBase64: waterCheckIn.photoBase64 })
+    state.waterHistory = await WaterReminder.saveWaterStateCheck({ sessionId: waterCheckIn.sessionId, mimeType: photo.mimeType, dataBase64: photo.dataBase64 })
     setUserMessage(`状态验证已保存在本机，将在 ${state.status.waterRetryMinutes} 分钟后再次提醒`)
     switchPage('water')
-  } catch (error) { waterCheckIn.message = error instanceof Error ? error.message : '保存状态验证失败' }
+  } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '保存状态验证失败') }
   finally { waterCheckIn.submitting = false }
 }
 async function openWaterHistory() {
@@ -933,12 +989,16 @@ async function restoreWaterRecord(record: WaterCheckInRecord) {
     setUserMessage('记录已恢复')
   } catch (error) { setUserMessage(error instanceof Error ? error.message : '恢复记录失败', 4000) }
 }
+function waterRecordPhotoNames(record: WaterCheckInRecord) {
+  return Array.from(new Set([...(record.photoFileNames || []), record.photoFileName].filter((name): name is string => Boolean(name))))
+}
 async function toggleWaterHistoryPhoto(record: WaterCheckInRecord) {
-  if (!record.photoFileName) return
+  const fileNames = waterRecordPhotoNames(record)
+  if (!fileNames.length) return
   if (state.waterHistoryImages[record.id]) { delete state.waterHistoryImages[record.id]; return }
   try {
-    const photo = await WaterReminder.getWaterPhoto({ photoFileName: record.photoFileName })
-    state.waterHistoryImages[record.id] = `data:${photo.mimeType};base64,${photo.dataBase64}`
+    const photos = await Promise.all(fileNames.map(photoFileName => WaterReminder.getWaterPhoto({ photoFileName })))
+    state.waterHistoryImages[record.id] = photos.map(photo => `data:${photo.mimeType};base64,${photo.dataBase64}`)
   } catch (error) { setUserMessage(error instanceof Error ? error.message : '读取本地照片失败', 4000) }
 }
 function addWaterContainer() { state.waterContainers.push({ id: '', name: '新容器', emptyWeightGrams: 0 }) }
@@ -1167,11 +1227,14 @@ onUnmounted(() => {
   if (autoSaveTimer) window.clearTimeout(autoSaveTimer)
   if (resumeTimer) window.clearTimeout(resumeTimer)
   if (filePickerRecoveryTimer) window.clearTimeout(filePickerRecoveryTimer)
+  if (waterPhotoMessageTimer) window.clearTimeout(waterPhotoMessageTimer)
 })
 </script>
 
 <template>
   <div class="app-shell">
+    <input ref="waterGalleryInput" class="hidden-file-input" type="file" accept="image/*" :multiple="waterCheckIn.action === 'drank'" @change="handleWaterPhoto" />
+    <input ref="waterCameraInput" class="hidden-file-input" type="file" accept="image/*" :capture="waterCheckIn.action === 'forced_state' ? 'user' : 'environment'" @change="handleWaterPhoto" />
     <header class="top-bar">
       <div>
         <p class="eyebrow">水息守护</p>
@@ -1295,8 +1358,13 @@ onUnmounted(() => {
             <div class="calculation-card"><span>自动换算</span><strong>{{ calculatedWaterMl }} ml</strong><small>总重量 {{ Number(waterCheckIn.totalWeightGrams || 0) }}g − 空容器 {{ selectedWaterContainer?.emptyWeightGrams || 0 }}g；按 1g 水≈1ml 计算</small></div>
           </template>
           <div class="check-in-photo-row">
-            <label class="photo-picker">饮水凭证照片（仅本机保存）<input type="file" accept="image/*" @click="beginFilePicker" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName ? '已选择图片，点击右侧预览' : '拍摄或选择图片' }}</span></label>
-            <button v-if="waterCheckInPhotoPreview" class="photo-preview-thumb" aria-label="预览所选图片" @click="photoPreviewOpen = true"><img :src="waterCheckInPhotoPreview" alt="所选饮水凭证缩略图" /></button>
+            <button class="photo-picker photo-picker-button" type="button" @click="openWaterPhotoSourceDialog"><span>饮水凭证照片（选填，仅本机保存）</span><strong>{{ waterPhotoPickerText }}</strong></button>
+            <div v-if="waterCheckIn.photos.length" class="selected-photo-strip" aria-label="已选择的凭证照片">
+              <div v-for="(photo, index) in waterCheckIn.photos" :key="photo.id" class="selected-photo-item">
+                <button class="photo-preview-thumb" :aria-label="`预览第 ${index + 1} 张凭证照片`" @click="showWaterPhoto(index)"><img :src="`data:${photo.mimeType};base64,${photo.dataBase64}`" :alt="`第 ${index + 1} 张凭证照片缩略图`" /></button>
+                <button class="selected-photo-remove" :aria-label="`删除第 ${index + 1} 张凭证照片`" @click="removeWaterPhoto(index)">×</button>
+              </div>
+            </div>
           </div>
           <p v-if="waterCheckIn.message" class="inline-message compact-inline-message" role="status">{{ waterCheckIn.message }}</p>
           <div class="actions check-in-actions"><button :disabled="waterCheckIn.submitting" @click="submitWaterDrank">{{ waterCheckIn.submitting ? '正在保存…' : '保存本次记录' }}</button><button class="ghost" @click="isManualWaterCheckIn ? switchPage('water') : waterCheckIn.action = 'prompt'">{{ isManualWaterCheckIn ? '取消记录' : '返回选择' }}</button></div>
@@ -1306,8 +1374,10 @@ onUnmounted(() => {
           <h2>状态自拍验证</h2>
           <p>照片只写入应用本地目录，不会上传网络。完成后会重新安排稍后提醒。</p>
           <div class="check-in-photo-row">
-            <label class="photo-picker urgent-picker">当前状态自拍<input type="file" accept="image/*" capture="user" @click="beginFilePicker" @change="handleWaterPhoto" /><span>{{ waterCheckIn.photoName ? '已选择图片，点击右侧预览' : '立即拍摄或选择图片' }}</span></label>
-            <button v-if="waterCheckInPhotoPreview" class="photo-preview-thumb urgent" aria-label="预览状态自拍" @click="photoPreviewOpen = true"><img :src="waterCheckInPhotoPreview" alt="所选状态自拍缩略图" /></button>
+            <button class="photo-picker photo-picker-button urgent-picker" type="button" @click="openWaterPhotoSourceDialog"><span>当前状态自拍</span><strong>{{ waterPhotoPickerText }}</strong></button>
+            <div v-if="waterCheckIn.photos.length" class="selected-photo-strip single-photo">
+              <div class="selected-photo-item"><button class="photo-preview-thumb urgent" aria-label="预览状态自拍" @click="showWaterPhoto(0)"><img :src="waterCheckInPhotoPreview" alt="所选状态自拍缩略图" /></button><button class="selected-photo-remove" aria-label="删除状态自拍" @click="removeWaterPhoto(0)">×</button></div>
+            </div>
           </div>
           <p v-if="waterCheckIn.message" class="inline-message warning">{{ waterCheckIn.message }}</p>
           <button class="full-button" :disabled="waterCheckIn.submitting" @click="submitWaterStateCheck">{{ waterCheckIn.submitting ? '正在保存…' : '完成验证' }}</button>
@@ -1352,11 +1422,11 @@ onUnmounted(() => {
               </div>
               <p v-else-if="record.description" class="history-description">{{ record.description }}</p>
               <div class="history-actions">
-                <button v-if="record.photoFileName" class="ghost mini-button" @click="toggleWaterHistoryPhoto(record)">{{ state.waterHistoryImages[record.id] ? '收起图片' : '查看图片' }}</button>
+                <button v-if="waterRecordPhotoNames(record).length" class="ghost mini-button" @click="toggleWaterHistoryPhoto(record)">{{ state.waterHistoryImages[record.id] ? '收起图片' : `查看图片（${waterRecordPhotoNames(record).length}）` }}</button>
                 <template v-if="historyShowingTrash"><button class="ghost mini-button" @click="restoreWaterRecord(record)">恢复记录</button></template>
                 <template v-else><button v-if="record.type === 'drank'" class="ghost mini-button" @click="beginEditWaterRecord(record)">{{ record.description ? '修改说明' : '补充说明' }}</button><button class="danger-ghost mini-button" @click="deleteWaterRecord(record)">删除记录</button></template>
               </div>
-              <img v-if="state.waterHistoryImages[record.id]" :src="state.waterHistoryImages[record.id]" alt="喝水记录本地凭证照片" loading="lazy" />
+              <div v-if="state.waterHistoryImages[record.id]" class="history-photo-grid"><img v-for="(photo, index) in state.waterHistoryImages[record.id]" :key="index" :src="photo" :alt="`喝水记录本地凭证照片 ${index + 1}`" loading="lazy" /></div>
             </div>
           </article>
             </div>
@@ -1457,11 +1527,22 @@ onUnmounted(() => {
       <p v-if="isSettingsPage" class="hint">如使用 MIUI/HyperOS，请在权限配置中允许通知、自启动、锁屏显示与不限制省电。</p>
     </main>
 
+    <div v-if="photoSourceDialogOpen" class="photo-preview-overlay" role="dialog" aria-modal="true" aria-label="选择照片来源" @click.self="photoSourceDialogOpen = false">
+      <section class="photo-source-dialog">
+        <h2>{{ waterCheckIn.action === 'forced_state' ? '添加状态自拍' : '添加凭证照片' }}</h2>
+        <p>请选择照片来源。照片只会保存在本机。</p>
+        <button @click="chooseWaterPhotoSource('camera')"><span>📷</span><strong>调用相机拍照</strong></button>
+        <button class="ghost" @click="chooseWaterPhotoSource('gallery')"><span>🖼️</span><strong>从相册选择{{ waterCheckIn.action === 'drank' ? '（可多选）' : '' }}</strong></button>
+        <button class="ghost photo-source-cancel" @click="photoSourceDialogOpen = false">取消</button>
+      </section>
+    </div>
+
     <div v-if="photoPreviewOpen && waterCheckInPhotoPreview" class="photo-preview-overlay" role="dialog" aria-modal="true" aria-label="图片预览" @click.self="photoPreviewOpen = false">
       <section class="photo-preview-dialog">
         <button class="photo-preview-close" aria-label="关闭图片预览" @click="photoPreviewOpen = false">×</button>
-        <img :src="waterCheckInPhotoPreview" :alt="waterCheckIn.photoName || '所选图片预览'" />
-        <p>{{ waterCheckIn.photoName || '所选图片' }}</p>
+        <img :src="waterCheckInPhotoPreview" :alt="waterCheckIn.photos[photoPreviewIndex]?.name || '所选图片预览'" />
+        <p>{{ waterCheckIn.photos[photoPreviewIndex]?.name || '所选图片' }} · 第 {{ photoPreviewIndex + 1 }} / {{ waterCheckIn.photos.length }} 张</p>
+        <button class="danger-ghost photo-preview-delete" @click="removeWaterPhoto(photoPreviewIndex)">删除这张照片</button>
       </section>
     </div>
 
