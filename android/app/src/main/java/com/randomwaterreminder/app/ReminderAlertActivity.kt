@@ -505,8 +505,14 @@ class ReminderAlertActivity : Activity() {
     }
 
     private fun finishAfterScreenAction() {
-        if (!isTest) moveTaskToBack(true)
-        finish()
+        finishReminderTask()
+    }
+
+    private fun finishReminderTask() {
+        // ReminderAlertActivity has no task affinity and is the root of a transient task.
+        // Removing that task lets Android reveal the exact task that was foreground before
+        // the reminder, instead of exposing WaterBreak's MainActivity underneath it.
+        finishAndRemoveTask()
     }
 
     companion object {
@@ -543,7 +549,7 @@ class ReminderAlertActivity : Activity() {
                 if (activity == null) {
                     activeActivities.remove(reference)
                 } else if ((type == null || activity.reminderType == type) && (sessionId.isBlank() || activity.sessionId == sessionId)) {
-                    activity.runOnUiThread { if (!activity.isFinishing) activity.finish() }
+                    activity.runOnUiThread { if (!activity.isFinishing) activity.finishReminderTask() }
                 }
             }
         }

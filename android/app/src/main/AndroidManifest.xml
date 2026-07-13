@@ -28,7 +28,9 @@
             android:name=".ReminderAlertActivity"
             android:excludeFromRecents="true"
             android:exported="false"
+            android:launchMode="singleTask"
             android:showWhenLocked="true"
+            android:taskAffinity=""
             android:theme="@style/AppTheme.AlertOverlay"
             android:turnScreenOn="true" />
 
