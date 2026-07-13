@@ -248,6 +248,7 @@ const waterPhotoPickerText = computed(() => waterCheckIn.photos.length
   : waterCheckIn.action === 'forced_state' ? '拍照或从相册选择' : '添加凭证照片')
 const waterDrinkTypes: WaterDrinkType[] = ['白水', '冲剂', '药物', '饮料', '茶水', '果茶', '奶茶', '其他']
 const isManualWaterCheckIn = computed(() => state.activePage === 'waterCheckIn' && !waterCheckIn.sessionId && !waterCheckIn.isTest)
+const isReminderWaterCheckIn = computed(() => state.activePage === 'waterCheckIn' && !!waterCheckIn.sessionId && !waterCheckIn.isTest)
 const cancelCycleText = computed(() => {
   if (screenCyclePhase.value === 'idle') return '未进入提醒循环'
   if (screenCyclePhase.value === 'alerting') return '提醒中'
@@ -394,6 +395,23 @@ function openSettings() {
   state.settingsSource = source
   switchPage(source === 'screen' ? 'screenSettings' : 'waterSettings', true)
 }
+async function finishWaterCheckIn() {
+  if (!isReminderWaterCheckIn.value) {
+    switchPage('water')
+    return
+  }
+  try {
+    // MainActivity was brought in front of the app that owned the screen when the
+    // reminder fired. Moving its task to the back restores that app immediately.
+    // Reset this page only after Android has hidden the task, avoiding a flash of
+    // the WaterBreak dashboard before the previous app is revealed.
+    await CapacitorApp.minimizeApp()
+    switchPage('water')
+  } catch {
+    // Browser preview and unsupported platforms cannot minimize an Android task.
+    switchPage('water')
+  }
+}
 function navigateBack() {
   if (photoPreviewOpen.value) { photoPreviewOpen.value = false; return }
   if (photoSourceDialogOpen.value) { photoSourceDialogOpen.value = false; return }
@@ -401,6 +419,10 @@ function navigateBack() {
   if (isWaterFlowPage.value) {
     if (state.activePage === 'waterCheckIn' && waterCheckIn.action === 'forced_state' && !waterCheckIn.isTest) {
       waterCheckIn.message = '连续三次未喝后，需要先完成状态自拍验证。'
+      return
+    }
+    if (state.activePage === 'waterCheckIn') {
+      void finishWaterCheckIn()
       return
     }
     switchPage('water')
@@ -895,7 +917,7 @@ async function submitWaterDrank() {
     })
     await refreshStatus()
     setUserMessage(`已保存本次${waterCheckIn.drinkType} ${amount} 毫升${waterCheckIn.photos.length ? `及 ${waterCheckIn.photos.length} 张本地凭证照片` : ''}`)
-    switchPage('water')
+    await finishWaterCheckIn()
   } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '保存喝水记录失败') }
   finally { waterCheckIn.submitting = false }
 }
@@ -912,7 +934,7 @@ async function submitWaterNotDrank() {
     } else {
       setUserMessage(`将在 ${result.retryMinutes} 分钟后再次提醒`)
       await refreshStatus()
-      switchPage('water')
+      await finishWaterCheckIn()
     }
   } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '处理未喝失败') }
   finally { waterCheckIn.submitting = false }
@@ -925,7 +947,7 @@ async function submitWaterStateCheck() {
   try {
     state.waterHistory = await WaterReminder.saveWaterStateCheck({ sessionId: waterCheckIn.sessionId, mimeType: photo.mimeType, dataBase64: photo.dataBase64 })
     setUserMessage(`状态验证已保存在本机，将在 ${state.status.waterRetryMinutes} 分钟后再次提醒`)
-    switchPage('water')
+    await finishWaterCheckIn()
   } catch (error) { setWaterCheckInMessage(error instanceof Error ? error.message : '保存状态验证失败') }
   finally { waterCheckIn.submitting = false }
 }
@@ -1242,7 +1264,7 @@ onUnmounted(() => {
       </div>
       <div v-if="isSettingsPage || isPermissionGuidePage || isWaterFlowPage" class="top-actions">
         <button v-if="isSettingsPage" class="icon-button update-entry-button" aria-label="应用更新" title="应用更新" @click="openUpdatePanel">⬆</button>
-        <button class="icon-button" aria-label="返回" @click="closeSettings">←</button>
+        <button class="icon-button" :aria-label="isReminderWaterCheckIn ? '返回原应用' : '返回'" :title="isReminderWaterCheckIn ? '返回原应用' : '返回'" @click="closeSettings">←</button>
       </div>
       <button v-else class="icon-button" aria-label="打开设置" @click="openSettings">⚙</button>
     </header>
@@ -1330,7 +1352,7 @@ onUnmounted(() => {
           <span class="check-in-icon">{{ waterCheckIn.action === 'forced_state' ? '🛟' : '💧' }}</span>
           <div>
             <h2>{{ waterCheckIn.action === 'forced_state' ? '请先确认当前状态' : isManualWaterCheckIn ? '记录喝水' : waterCheckIn.action === 'drank' ? '记录这次喝水' : '这次喝水了吗？' }}</h2>
-            <p>{{ waterCheckIn.action === 'forced_state' ? '你已连续三次选择未喝。请上传一张当前状态自拍，照片只保存在本机。' : isManualWaterCheckIn ? '当前不是提醒会话，也可以随时记录饮水类型、容量、说明和凭证照片。' : '提醒已进入应用内处理；关闭本页不会截断独立播放的提示音。' }}</p>
+            <p>{{ waterCheckIn.action === 'forced_state' ? '你已连续三次选择未喝。请上传一张当前状态自拍，照片只保存在本机。' : isManualWaterCheckIn ? '当前不是提醒会话，也可以随时记录饮水类型、容量、说明和凭证照片。' : '处理完成后会返回提醒前使用的应用；关闭本页不会截断独立播放的提示音。' }}</p>
           </div>
         </section>
 
@@ -1531,8 +1553,8 @@ onUnmounted(() => {
       <section class="photo-source-dialog">
         <h2>{{ waterCheckIn.action === 'forced_state' ? '添加状态自拍' : '添加凭证照片' }}</h2>
         <p>请选择照片来源。照片只会保存在本机。</p>
-        <button @click="chooseWaterPhotoSource('camera')"><span>📷</span><strong>调用相机拍照</strong></button>
-        <button class="ghost" @click="chooseWaterPhotoSource('gallery')"><span>🖼️</span><strong>从相册选择{{ waterCheckIn.action === 'drank' ? '（可多选）' : '' }}</strong></button>
+        <button @click="chooseWaterPhotoSource('camera')"><span>📷</span><strong>相机拍照</strong></button>
+        <button class="ghost" @click="chooseWaterPhotoSource('gallery')"><span>🖼️</span><strong>相册选择</strong></button>
         <button class="ghost photo-source-cancel" @click="photoSourceDialogOpen = false">取消</button>
       </section>
     </div>
