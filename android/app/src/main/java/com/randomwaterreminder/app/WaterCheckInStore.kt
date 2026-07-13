@@ -78,11 +78,14 @@ object WaterCheckInStore {
         context: Context,
         sessionId: String,
         amountMl: Double,
-        photoFile: File,
+        photoFiles: List<File> = emptyList(),
         measurement: WaterMeasurement = WaterMeasurement(),
         now: Long = System.currentTimeMillis(),
     ): Boolean = synchronized(lock) {
-        if (!amountMl.isFinite() || amountMl !in 1.0..5_000.0 || !photoFile.isFile || photoFile.length() <= 0L) return@synchronized false
+        if (
+            !amountMl.isFinite() || amountMl !in 1.0..5_000.0 || photoFiles.size > MAX_PHOTOS_PER_RECORD ||
+            photoFiles.any { !it.isFile || it.length() <= 0L }
+        ) return@synchronized false
         val p = prefs(context)
         val handled = handledSessions(p)
         if (sessionId.isNotBlank() && sessionId in handled) return@synchronized false
@@ -92,11 +95,14 @@ object WaterCheckInStore {
                 .put("type", "drank")
                 .put("timestamp", now)
                 .put("amountMl", roundOneDecimal(amountMl))
-                .put("photoFileName", photoFile.name)
-                .put("photoPath", photoFile.absolutePath)
                 .put("sessionId", sessionId)
                 .put("entryMode", if (measurement.entryMode == "container") "container" else "volume")
                 .put("drinkType", measurement.drinkType.trim().ifBlank { "白水" }.take(40))
+        if (photoFiles.isNotEmpty()) {
+            record.put("photoFileName", photoFiles.first().name)
+                .put("photoFileNames", JSONArray(photoFiles.map { it.name }))
+                .put("photoPath", photoFiles.first().absolutePath)
+        }
         measurement.description.trim().takeIf { it.isNotBlank() }?.let { record.put("description", it.take(500)) }
         if (measurement.entryMode == "container") {
             measurement.containerId.takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,80}")) }?.let { record.put("containerId", it) }
@@ -132,6 +138,7 @@ object WaterCheckInStore {
                 .put("type", "state_check")
                 .put("timestamp", now)
                 .put("photoFileName", photoFile.name)
+                .put("photoFileNames", JSONArray().put(photoFile.name))
                 .put("photoPath", photoFile.absolutePath)
                 .put("sessionId", sessionId),
         )
@@ -144,7 +151,7 @@ object WaterCheckInStore {
             .commit()
     }
 
-    fun snapshot(context: Context, limit: Int = 20): JSONObject = synchronized(lock) {
+    fun snapshot(context: Context, limit: Int = 20, deletedOnly: Boolean = false): JSONObject = synchronized(lock) {
         val p = prefs(context)
         val stored = records(p)
         val now = System.currentTimeMillis()
@@ -160,6 +167,7 @@ object WaterCheckInStore {
         var lastDrankAt = 0L
         for (index in 0 until stored.length()) {
             val record = stored.optJSONObject(index) ?: continue
+            if (record.optLong("deletedAt", 0L) > 0L) continue
             val timestamp = record.optLong("timestamp", 0L)
             if (record.optString("type") == "drank" && timestamp in todayStart..now) {
                 todayTotalMl += record.optDouble("amountMl", 0.0).coerceAtLeast(0.0)
@@ -168,11 +176,12 @@ object WaterCheckInStore {
             }
         }
         val recent = JSONArray()
-        val start = (stored.length() - limit.coerceIn(1, MAX_RECORDS)).coerceAtLeast(0)
-        for (index in stored.length() - 1 downTo start) {
-            stored.optJSONObject(index)?.let { record ->
-                recent.put(JSONObject(record.toString()).apply { remove("photoPath") })
-            }
+        for (index in stored.length() - 1 downTo 0) {
+            val record = stored.optJSONObject(index) ?: continue
+            val isDeleted = record.optLong("deletedAt", 0L) > 0L
+            if (isDeleted != deletedOnly) continue
+            recent.put(JSONObject(record.toString()).apply { remove("photoPath") })
+            if (recent.length() >= limit.coerceIn(1, MAX_RECORDS)) break
         }
         JSONObject()
             .put("consecutiveNotDrank", p.getInt(KEY_CONSECUTIVE_NOT_DRANK, 0).coerceAtLeast(0))
@@ -181,6 +190,24 @@ object WaterCheckInStore {
             .put("todayRecordCount", todayRecordCount)
             .put("lastDrankAt", lastDrankAt)
             .put("records", recent)
+    }
+
+    fun updateDescription(context: Context, id: String, description: String): Boolean = synchronized(lock) {
+        if (id.isBlank() || description.length > 500) return@synchronized false
+        mutateRecord(context, id) { record ->
+            val normalized = description.trim()
+            if (normalized.isBlank()) record.remove("description") else record.put("description", normalized)
+        }
+    }
+
+    fun softDelete(context: Context, id: String, now: Long = System.currentTimeMillis()): Boolean = synchronized(lock) {
+        mutateRecord(context, id) { record ->
+            if (record.optLong("deletedAt", 0L) <= 0L) record.put("deletedAt", now)
+        }
+    }
+
+    fun restore(context: Context, id: String): Boolean = synchronized(lock) {
+        mutateRecord(context, id) { record -> record.remove("deletedAt") }
     }
 
     fun portableState(context: Context): JSONObject = synchronized(lock) {
@@ -226,7 +253,12 @@ object WaterCheckInStore {
                 }
             }
             if (type == "not_drank") record.put("consecutiveNotDrank", item.optInt("consecutiveNotDrank", 1).coerceIn(1, 3))
-            item.optString("photoFileName").takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }?.let { record.put("photoFileName", it) }
+            item.optLong("deletedAt", 0L).takeIf { it > 0L }?.let { record.put("deletedAt", it) }
+            val photoNames = validatedPhotoNames(item)
+            if (photoNames.isNotEmpty()) {
+                record.put("photoFileName", photoNames.first())
+                    .put("photoFileNames", JSONArray(photoNames))
+            }
             validated.put(record)
         }
         val count = imported.optInt("consecutiveNotDrank", 0).coerceIn(0, 3)
@@ -268,5 +300,33 @@ object WaterCheckInStore {
         while (records.length() > MAX_RECORDS) records.remove(0)
     }
 
+    private fun mutateRecord(context: Context, id: String, mutation: (JSONObject) -> Unit): Boolean {
+        val p = prefs(context)
+        val stored = records(p)
+        for (index in 0 until stored.length()) {
+            val record = stored.optJSONObject(index) ?: continue
+            if (record.optString("id") != id) continue
+            mutation(record)
+            return p.edit().putString(KEY_RECORDS, stored.toString()).commit()
+        }
+        return false
+    }
+
     private fun roundOneDecimal(value: Double): Double = kotlin.math.round(value * 10.0) / 10.0
+
+    private fun validatedPhotoNames(record: JSONObject): List<String> {
+        val names = linkedSetOf<String>()
+        val source = record.optJSONArray("photoFileNames")
+        for (index in 0 until minOf(source?.length() ?: 0, MAX_PHOTOS_PER_RECORD)) {
+            source?.optString(index)
+                ?.takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }
+                ?.let { names += it }
+        }
+        record.optString("photoFileName")
+            .takeIf { it.matches(Regex("[A-Za-z0-9._-]{1,180}")) }
+            ?.let { names += it }
+        return names.take(MAX_PHOTOS_PER_RECORD)
+    }
+
+    private const val MAX_PHOTOS_PER_RECORD = 6
 }

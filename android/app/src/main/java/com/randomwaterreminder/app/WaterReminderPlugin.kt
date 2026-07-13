@@ -21,6 +21,7 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -137,7 +138,7 @@ class WaterReminderPlugin : Plugin() {
             text = config.waterNotificationText
         } else {
             title = "亮屏时间过长（测试）"
-            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，建议息屏休息一下。"
+            text = "已经连续亮屏 ${config.screenOnLimitMinutes.coerceAtLeast(1)} 分钟以上，请在 ${config.requiredScreenOffMinutes.coerceAtLeast(1) * 2} 分钟内累计息屏 ${config.requiredScreenOffMinutes.coerceAtLeast(1)} 分钟。"
         }
         AlertCoordinator.alertAsync(context, type, title, text, config, isTest = true, sessionId = "test-${System.currentTimeMillis()}") { result ->
             call.resolve(result.toJsObject())
@@ -220,7 +221,11 @@ class WaterReminderPlugin : Plugin() {
 
     @PluginMethod
     fun getWaterCheckInHistory(call: PluginCall) {
-        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context, call.getInt("limit", 20) ?: 20)))
+        call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(
+            context,
+            call.getInt("limit", 20) ?: 20,
+            call.getBoolean("deletedOnly", false) ?: false,
+        )))
     }
 
     @PluginMethod
@@ -262,7 +267,7 @@ class WaterReminderPlugin : Plugin() {
             return
         }
         val sessionId = call.getString("sessionId").orEmpty()
-        val photo = saveWaterPhoto(call, "drank") ?: return
+        val photos = saveWaterPhotos(call, "drank") ?: return
         val measurement = WaterMeasurement(
             entryMode = call.getString("entryMode", "volume") ?: "volume",
             drinkType = call.getString("drinkType", "白水") ?: "白水",
@@ -272,10 +277,17 @@ class WaterReminderPlugin : Plugin() {
             emptyWeightGrams = call.getDouble("emptyWeightGrams"),
             totalWeightGrams = call.getDouble("totalWeightGrams"),
         )
-        if (!WaterCheckInStore.recordDrank(context, sessionId, amountMl, photo, measurement)) {
-            photo.delete()
+        if (!WaterCheckInStore.recordDrank(context, sessionId, amountMl, photos, measurement)) {
+            photos.forEach { it.delete() }
             call.reject("喝水记录保存失败或本次提醒已经处理")
             return
+        }
+        if (sessionId.isBlank()) {
+            val config = ReminderPreferences.read(context)
+            if (config.enabled) {
+                val next = WaterReminderScheduler.calculateNextReminderTime(config, System.currentTimeMillis())
+                WaterReminderScheduler.scheduleNextReminder(context, next)
+            }
         }
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
     }
@@ -312,6 +324,36 @@ class WaterReminderPlugin : Plugin() {
             System.currentTimeMillis() + config.waterRetryMinutes.coerceIn(1, 180) * 60_000L,
         )
         call.resolve(JSObject.fromJSONObject(WaterCheckInStore.snapshot(context)))
+    }
+
+    @PluginMethod
+    fun updateWaterRecordDescription(call: PluginCall) {
+        val id = call.getString("id").orEmpty()
+        val description = call.getString("description").orEmpty()
+        if (description.length > 500) {
+            call.reject("喝水说明不能超过 500 个字符")
+            return
+        }
+        val updated = WaterCheckInStore.updateDescription(context, id, description)
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("updated", updated)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
+    }
+
+    @PluginMethod
+    fun deleteWaterRecord(call: PluginCall) {
+        val deleted = WaterCheckInStore.softDelete(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("deleted", deleted)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
+    }
+
+    @PluginMethod
+    fun restoreWaterRecord(call: PluginCall) {
+        val restored = WaterCheckInStore.restore(context, call.getString("id").orEmpty())
+        call.resolve(JSObject.fromJSONObject(JSONObject()
+            .put("restored", restored)
+            .put("history", WaterCheckInStore.snapshot(context, 200))))
     }
 
     @PluginMethod
@@ -552,6 +594,53 @@ class WaterReminderPlugin : Plugin() {
         }
     }
 
+    private fun saveWaterPhotos(call: PluginCall, prefix: String): List<File>? {
+        val encodedPhotos = call.getArray("photos")?.let { JSONArray(it.toString()) } ?: JSONArray()
+        if (encodedPhotos.length() > 6) {
+            call.reject("每条记录最多保存 6 张凭证照片")
+            return null
+        }
+        // Accept the pre-v1.0.14 single-photo shape so older web bundles remain usable.
+        if (encodedPhotos.length() == 0 && !call.getString("dataBase64").isNullOrBlank()) {
+            return saveWaterPhoto(call, prefix)?.let(::listOf)
+        }
+        val saved = mutableListOf<File>()
+        var encodedSize = 0L
+        for (index in 0 until encodedPhotos.length()) {
+            val item = encodedPhotos.optJSONObject(index)
+            val mimeType = item?.optString("mimeType", "image/jpeg").orEmpty()
+            val dataBase64 = item?.optString("dataBase64").orEmpty()
+            encodedSize += dataBase64.length
+            if (!mimeType.startsWith("image/") || dataBase64.isBlank()) {
+                saved.forEach { it.delete() }
+                call.reject("第 ${index + 1} 张凭证不是有效图片")
+                return null
+            }
+            if (dataBase64.length > 30_000_000 || encodedSize > 60_000_000L) {
+                saved.forEach { it.delete() }
+                call.reject("凭证照片过大，请减少数量或选择更小的图片")
+                return null
+            }
+            val extension = when (mimeType.lowercase()) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            val file = runCatching {
+                WaterCheckInStore.createPhotoFile(context, prefix, extension).apply {
+                    writeBytes(Base64.decode(dataBase64, Base64.DEFAULT))
+                    require(length() > 0L) { "凭证照片为空" }
+                }
+            }.getOrElse {
+                saved.forEach { photo -> photo.delete() }
+                call.reject(it.message ?: "保存凭证照片失败")
+                return null
+            }
+            saved += file
+        }
+        return saved
+    }
+
     @PluginMethod
     fun requestNotificationPermission(call: PluginCall) {
         if (
@@ -611,7 +700,7 @@ class WaterReminderPlugin : Plugin() {
         config.minIntervalMinutes < 1 -> "最小间隔必须大于 0"
         config.maxIntervalMinutes < config.minIntervalMinutes -> "最大间隔不可小于最小间隔"
         config.screenOnLimitMinutes < 0 -> "亮屏超时提醒分钟数不可小于 0"
-        config.requiredScreenOffMinutes < 1 -> "连续息屏分钟数必须大于 0"
+        config.requiredScreenOffMinutes < 1 -> "累计息屏分钟数必须大于 0"
         config.cancelBeforeLockCount < 1 -> "取消后强制熄屏次数必须大于 0"
         config.waterRetryMinutes !in 1..180 -> "未喝后的再次提醒间隔必须在 1-180 分钟之间"
         config.waterVolumePercent !in 0..100 || config.screenVolumePercent !in 0..100 -> "提醒音量必须在 0-100 之间"

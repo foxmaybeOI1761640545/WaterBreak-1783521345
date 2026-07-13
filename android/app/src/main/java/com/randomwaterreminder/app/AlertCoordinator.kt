@@ -65,13 +65,19 @@ object AlertCoordinator {
         }
         notes += "悬浮:${overlayResult.reason}"
 
-        val centerResult = runCatching {
+        // A screen overlay is already interactive and stays above the app the user was using.
+        // Starting ReminderAlertActivity as well would foreground WaterBreak underneath the
+        // overlay, so dismissing the overlay appears to return to WaterBreak instead of the
+        // previous app. Only use the transient Activity when the overlay is unavailable.
+        val centerResult = if (!ScreenAlertPresentationPolicy.shouldLaunchCenterActivity(type, overlayResult.ok)) {
+            ChannelResult(false, "悬浮窗已显示，保留原应用前台")
+        } else runCatching {
             if (type == ReminderType.WATER) {
                 app.startActivity(AppNavigation.waterCheckInIntent(app, sessionId, isTest))
                 ChannelResult(true, "已打开应用内喝水确认页")
             } else {
                 app.startActivity(ReminderAlertActivity.intent(app, type, title, text, isTest, sessionId))
-                ChannelResult(true, "已显示居中弹窗")
+                ChannelResult(true, "已显示独立任务弹窗")
             }
         }.getOrElse {
             Log.w(TAG, "center activity failed type=${type.value} session=$sessionId", it)
@@ -128,4 +134,9 @@ object AlertCoordinator {
         NotificationHelper.cancelVibration(app)
         if (closeActivity) ReminderAlertActivity.dismissActive(type)
     }
+}
+
+object ScreenAlertPresentationPolicy {
+    fun shouldLaunchCenterActivity(type: ReminderType, overlayShown: Boolean): Boolean =
+        type != ReminderType.SCREEN_LIMIT || !overlayShown
 }
